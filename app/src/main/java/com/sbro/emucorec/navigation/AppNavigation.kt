@@ -134,7 +134,9 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     val licensePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
         val fileName = DocumentPathResolver.getDisplayName(context, uri.toString())
-        if (!fileName.endsWith(".rap", ignoreCase = true)) {
+        if (!fileName.endsWith(".rap", ignoreCase = true) &&
+            !fileName.endsWith(".edat", ignoreCase = true)
+        ) {
             Toast.makeText(context, R.string.core_install_license_unsupported, Toast.LENGTH_SHORT).show()
         } else {
             installViewModel.installLicense(uri.toString())

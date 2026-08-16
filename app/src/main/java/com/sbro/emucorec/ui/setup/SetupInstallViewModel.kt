@@ -11,6 +11,7 @@ import com.sbro.emucorec.core.ArchivePreparationException
 import com.sbro.emucorec.core.InstallStateBus
 import com.sbro.emucorec.core.NativeInstallProgress
 import com.sbro.emucorec.core.Ps3InstallBridge
+import com.sbro.emucorec.core.Ps3Runtime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -108,6 +109,8 @@ class SetupInstallViewModel(application: Application) : AndroidViewModel(applica
             Ps3InstallBridge.setListener(::handleProgress)
             try {
                 block()
+            } catch (error: Ps3Runtime.LicenseInstallException) {
+                finishError(appContext.getString(R.string.install_dialog_license_failed), error.message)
             } catch (error: Throwable) {
                 finishError(appContext.getString(R.string.install_dialog_unexpected_error), error.message)
             } finally {

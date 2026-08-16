@@ -4071,7 +4071,20 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
     std::uint64_t totalProgress = 0;
     for (auto &reader : readers) {
       if (result.error != package_install_result::error_type::no_error) {
-        progress.failure("Installation failed");
+        std::string reason = "Installation failed";
+        if (result.error == package_install_result::error_type::app_version) {
+          if (!result.version.installed.empty()) {
+            reason = fmt::format("App version mismatch: installed %s, package "
+                                 "requires %s",
+                                 result.version.installed,
+                                 result.version.expected);
+          } else {
+            reason = fmt::format("App version %s is required, but no installed "
+                                 "game was found for this package",
+                                 result.version.expected);
+          }
+        }
+        progress.failure(reason);
         for (package_reader &reader : readers) {
           reader.abort_extract();
         }
@@ -4582,6 +4595,26 @@ extern "C" jstring _rpcsx_getDirInstallPath(JNIEnv *env, jint fd) {
   }
 
   return nullptr;
+}
+
+// Read the PARAM.SFO content id of a PKG. Used to name RAP licenses that ship
+// alongside DLC packages: the core only finds a license by its content id, so
+// the user's filename cannot be trusted to name the .rap correctly.
+extern "C" jstring _rpcsx_pkgContentId(JNIEnv *env, jint fd) {
+  auto file = fs::file::from_native_handle(fd);
+  AtExit atExit{[&] { file.release_handle(); }};
+
+  package_reader reader("part0.pkg", std::move(file));
+  if (!reader.is_valid()) {
+    return nullptr;
+  }
+
+  const auto contentId = std::string(safe_psf_get_string(reader.get_psf(), "CONTENT_ID"));
+  if (contentId.empty()) {
+    return nullptr;
+  }
+
+  return wrap(env, contentId);
 }
 
 // Install a set of PKG parts as one package. All parts must be PKGs, in order.

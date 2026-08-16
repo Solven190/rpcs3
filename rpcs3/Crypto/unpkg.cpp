@@ -709,6 +709,16 @@ package_install_result package_reader::check_target_app_version() const
 		return {package_install_result::error_type::no_error};
 	}
 
+	// DLC packages are non-patch game data. They carry a target app version (the
+	// game version they were built against) but are not bound by it: the game
+	// validates the content id at runtime. A version mismatch -- or a disc game
+	// that has no installed package directory at all -- must not block the
+	// installation.
+	if (!(m_metadata.package_type & pkg_flag::PKG_FLAG_PATCH))
+	{
+		return {package_install_result::error_type::no_error};
+	}
+
 	const std::string sfo_path = rpcs3::utils::get_hdd0_dir() + "game/" + std::string(title_id) + "/PARAM.SFO";
 	const fs::file installed_sfo_file(sfo_path);
 	if (!installed_sfo_file)
@@ -752,12 +762,6 @@ package_install_result package_reader::check_target_app_version() const
 
 	if (target_app_ver.empty())
 	{
-		if (!(m_metadata.package_type & pkg_flag::PKG_FLAG_PATCH))
-		{
-			// This should be a DLC. Let's allow DLCs even with smaller APP_VER.
-			return {package_install_result::error_type::no_error};
-		}
-
 		// This is most likely the first patch. Let's make sure its version is high enough for the installed game.
 
 		const double new_version = std::strtod(app_ver.data(), &ev1);

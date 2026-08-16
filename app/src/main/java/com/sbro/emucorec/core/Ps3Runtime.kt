@@ -194,19 +194,41 @@ object Ps3Runtime {
             RPCSX.instance.installKey(descriptor.fd, progressId, gamePath)
         } ?: false
 
+    /** Thrown when a license file cannot be installed. The message is user-facing. */
+    class LicenseInstallException(message: String) : Exception(message)
+
+    /** Reads a PKG's PARAM.SFO content id, used to name its RAP license correctly. */
+    fun pkgContentId(context: Context, source: String): String? =
+        openDescriptor(context, source)?.use { descriptor ->
+            if (!ensureInitialized(context)) return@use null
+            RPCSX.instance.pkgContentId(descriptor.fd)
+        }
+
     /** Installs a standalone RAP by its content-id filename, as RPCS3's exdata import does. */
-    fun installRap(context: Context, source: String): Boolean = runCatching {
+    fun installRap(context: Context, source: String, contentId: String? = null): Boolean {
         if (!ensureInitialized(context)) return false
         val input = File(source)
-        if (!input.isFile || input.length() != 0x10L) return false
-        val contentId = input.nameWithoutExtension.trim()
-        if (!contentId.matches(Regex("[A-Za-z0-9_-]{1,128}"))) return false
+        if (!input.isFile || input.length() != 0x10L) {
+            throw LicenseInstallException("RAP license must be exactly 16 bytes (invalid or corrupted file)")
+        }
+
+        val resolvedContentId = contentId?.trim().orEmpty().ifBlank { input.nameWithoutExtension.trim() }
+        if (!resolvedContentId.matches(contentIdPattern)) {
+            throw LicenseInstallException(
+                "RAP license name must be its content ID (e.g. UP0001-BLUS30423_00-DLC0000000001.rap). " +
+                    "Rename the file and try again."
+            )
+        }
 
         val user = runCatching { RPCSX.instance.getUser() }.getOrNull().orEmpty().ifBlank { USER_ID }
         val directory = File(RPCSX.getHdd0Dir(), "home/$user/exdata").canonicalFile
-        if (!directory.isDirectory && !directory.mkdirs()) return false
-        val destination = File(directory, "$contentId.rap").canonicalFile
-        if (destination.parentFile != directory) return false
+        if (!directory.isDirectory && !directory.mkdirs()) {
+            throw LicenseInstallException("Failed to create the license directory")
+        }
+        val destination = File(directory, "$resolvedContentId.rap").canonicalFile
+        if (destination.parentFile != directory) {
+            throw LicenseInstallException("Invalid license destination path")
+        }
 
         val temporary = File.createTempFile(".emucorec-rap-", ".tmp", directory)
         try {
@@ -223,11 +245,14 @@ object Ps3Runtime {
             }.recoverCatching {
                 Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }.getOrThrow()
-            true
+            return true
         } finally {
             temporary.delete()
         }
-    }.getOrDefault(false)
+    }
+
+    private val contentIdPattern =
+        Regex("^([A-Za-z0-9]{2,6}-)?[A-Za-z0-9]{9}_[0-9]{2}-[A-Za-z0-9-]{1,40}$")
 
     private fun rejectProgressIfNeeded(progressId: Long, accepted: Boolean) {
         if (!accepted) ProgressRepository.onProgressEvent(progressId, -1, 0, "Installation failed")

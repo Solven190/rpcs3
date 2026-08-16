@@ -70,7 +70,7 @@ object Ps3InstallBridge {
         if (payloads.isEmpty() && licences.isEmpty()) return false
 
         val splitPackage = payloads.size > 1 &&
-            payloads.mapNotNull(::splitPackageKey).distinct().size == 1 &&
+            payloads.map(::splitBase).distinct().size == 1 &&
             payloads.all(::isPackagePart)
         val payloadUnits = if (splitPackage) 1 else payloads.size
         val totalUnits = payloadUnits + licences.size
@@ -95,7 +95,18 @@ object Ps3InstallBridge {
             if (!success) return@forEach
             success = if (file.extension.equals("rap", true)) {
                 emitUnit("license", unitIndex, totalUnits, 0f, file.name)
-                Ps3Runtime.installRap(context, file.absolutePath).also { installed ->
+                // The core only finds a RAP by its content id (from the game's
+                // NPDRM header), so name the license from the DLC package's
+                // PARAM.SFO instead of trusting the user's filename.
+                val pkgContentId = if (!splitPackage) {
+                    payloads.firstOrNull()?.let { payload ->
+                        runCatching { Ps3Runtime.pkgContentId(context, payload.absolutePath) }
+                            .getOrNull()?.ifBlank { null }
+                    }
+                } else {
+                    null
+                }
+                Ps3Runtime.installRap(context, file.absolutePath, pkgContentId).also { installed ->
                     emitUnit("license", unitIndex, totalUnits, if (installed) 1f else 0f, file.name)
                 }
             } else {
@@ -114,12 +125,12 @@ object Ps3InstallBridge {
     private fun isPackagePart(file: File): Boolean =
         file.name.contains(".pkg", ignoreCase = true)
 
-    private fun splitPackageKey(file: File): String? {
-        if (!isPackagePart(file)) return null
-        val withoutNumberedExtension = file.name.lowercase().replace(Regex("\\.pkg\\.\\d+$"), ".pkg")
-        val stem = withoutNumberedExtension.removeSuffix(".pkg")
-        val stripped = stem.replace(Regex("(?:[._-](?:part)?\\d+)$"), "")
-        return stripped.takeIf { it != stem || file.name.matches(Regex(".*\\.pkg\\.\\d+$", RegexOption.IGNORE_CASE)) }
+    // Splits ship either as "Game.pkg" + "Game.pkg.1" + "Game.pkg.2" or as
+    // "Game.pkg.0" + "Game.pkg.1" + ...: every part shares the base name
+    // without the ".pkg" (and optional numeric suffix) extension.
+    private fun splitBase(file: File): String {
+        val lower = file.name.lowercase()
+        return lower.replace(Regex("\\.pkg\\.\\d+$"), "").removeSuffix(".pkg")
     }
 
     private suspend fun awaitNativeInstall(
