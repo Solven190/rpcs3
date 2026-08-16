@@ -1610,4 +1610,12 @@ PS3 नेटिव का उपयोग केवल तभी किया �
     <string name="onboarding_permission_storage_desc">बिना कॉपी किए गेम फाइलों को सीधे पढ़ने के लिए डिवाइस स्टोरेज एक्सेस</string>
     <string name="onboarding_permission_storage_grant">अनुमति दें</string>
     <string name="onboarding_permission_storage_granted">अनुमति दी गई</string>
+    <string name="file_browser_title_license">लाइसेंस</string>
+    <string name="file_browser_title_pkg">गेम सामग्री</string>
+    <string name="file_browser_title_firmware">फ़र्मवेयर</string>
+    <string name="file_browser_change_folder">फ़ोल्डर बदलें</string>
+    <string name="file_browser_no_folder">कोई फ़ोल्डर चयनित नहीं</string>
+    <string name="file_browser_choose_folder_hint">शुरू करने के लिए गेम वाला फ़ोल्डर चुनें</string>
+    <string name="file_browser_choose_folder">फ़ोल्डर चुनें</string>
+    <string name="file_browser_install">इंस्टॉल करें (%1$d)</string>
 </resources>

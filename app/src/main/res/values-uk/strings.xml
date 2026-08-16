@@ -1616,4 +1616,12 @@ Over-Under ближче до рідного стереовиходу, але п�
     <string name="onboarding_permission_storage_desc">Доступ до пам\'яті пристрою для прямого читання ігор без копіювання</string>
     <string name="onboarding_permission_storage_grant">Надати дозвіл</string>
     <string name="onboarding_permission_storage_granted">Дозвіл надано</string>
+    <string name="file_browser_title_license">Ліцензія</string>
+    <string name="file_browser_title_pkg">Контент гри</string>
+    <string name="file_browser_title_firmware">Прошивка</string>
+    <string name="file_browser_change_folder">Змінити теку</string>
+    <string name="file_browser_no_folder">Теку не обрано</string>
+    <string name="file_browser_choose_folder_hint">Оберіть теку з іграми, щоб почати</string>
+    <string name="file_browser_choose_folder">Вибрати теку</string>
+    <string name="file_browser_install">Встановити (%1$d)</string>
 </resources>

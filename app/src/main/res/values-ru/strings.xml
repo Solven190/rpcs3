@@ -1616,4 +1616,12 @@ Over-Under ближе к собственному стереовыходу, но
     <string name="onboarding_permission_storage_desc">Доступ к памяти устройства для прямого запуска игр без копирования</string>
     <string name="onboarding_permission_storage_grant">Предоставить доступ</string>
     <string name="onboarding_permission_storage_granted">Доступ предоставлен</string>
+    <string name="file_browser_title_license">Лицензия</string>
+    <string name="file_browser_title_pkg">Контент игры</string>
+    <string name="file_browser_title_firmware">Прошивка</string>
+    <string name="file_browser_change_folder">Сменить папку</string>
+    <string name="file_browser_no_folder">Папка не выбрана</string>
+    <string name="file_browser_choose_folder_hint">Выберите папку с играми, чтобы начать</string>
+    <string name="file_browser_choose_folder">Выбрать папку</string>
+    <string name="file_browser_install">Установить (%1$d)</string>
 </resources>

@@ -1610,4 +1610,12 @@ Bu ayar yalnızca SPU Kod Çözücü Dinamik veya LLVM olarak ayarlandığında 
     <string name="onboarding_permission_storage_desc">Kopyalamadan oyun dosyalarını doğrudan okumak için cihaz depolama erişimi</string>
     <string name="onboarding_permission_storage_grant">İzin Ver</string>
     <string name="onboarding_permission_storage_granted">İzin Verildi</string>
+    <string name="file_browser_title_license">Lisans</string>
+    <string name="file_browser_title_pkg">Oyun içeriği</string>
+    <string name="file_browser_title_firmware">Ürün yazılımı</string>
+    <string name="file_browser_change_folder">Klasörü değiştir</string>
+    <string name="file_browser_no_folder">Klasör seçilmedi</string>
+    <string name="file_browser_choose_folder_hint">Başlamak için oyun içeren bir klasör seçin</string>
+    <string name="file_browser_choose_folder">Klasör seç</string>
+    <string name="file_browser_install">Yükle (%1$d)</string>
 </resources>

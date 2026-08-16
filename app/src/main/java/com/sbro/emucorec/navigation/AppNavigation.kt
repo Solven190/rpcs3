@@ -63,6 +63,8 @@ import com.sbro.emucorec.ui.setup.InstallGameChoiceDialog
 import com.sbro.emucorec.ui.setup.SetupInstallDialog
 import com.sbro.emucorec.ui.setup.SetupInstallViewModel
 import com.sbro.emucorec.ui.setup.SetupScreen
+import com.sbro.emucorec.ui.files.BrowserMode
+import com.sbro.emucorec.ui.files.FileBrowserScreen
 
 private const val ROUTE_ONBOARDING = "onboarding"
 private const val ROUTE_SETUP = "setup"
@@ -120,46 +122,13 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
     val systemMenuLaunchFailed = stringResource(R.string.system_menu_launch_failed)
     var showInstallChoiceDialog by rememberSaveable { mutableStateOf(false) }
 
-    val firmwarePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        uri ?: return@rememberLauncherForActivityResult
-        val fileName = DocumentPathResolver.getDisplayName(context, uri.toString())
-        val extension = fileName.substringAfterLast('.', "").lowercase()
-        if (extension != "pup") {
-            Toast.makeText(context, unsupportedFirmware, Toast.LENGTH_SHORT).show()
-        } else {
-            installViewModel.installFirmware(uri.toString())
-        }
-    }
+    // In-app file browser replaces the system SAF file picker, which hangs on
+    // some devices (OPPO/OnePlus DocumentsUI). See FileBrowserScreen.
+    var fileBrowserMode by remember { mutableStateOf<BrowserMode?>(null) }
 
-    val licensePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        uri ?: return@rememberLauncherForActivityResult
-        val fileName = DocumentPathResolver.getDisplayName(context, uri.toString())
-        if (!fileName.endsWith(".rap", ignoreCase = true) &&
-            !fileName.endsWith(".edat", ignoreCase = true)
-        ) {
-            Toast.makeText(context, R.string.core_install_license_unsupported, Toast.LENGTH_SHORT).show()
-        } else {
-            installViewModel.installLicense(uri.toString())
-        }
-    }
-
-    val pkgPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        val unsupported = uris.firstOrNull { uri ->
-            !ArchiveContentInstaller.isSupportedSelectionName(
-                DocumentPathResolver.getDisplayName(context, uri.toString())
-            )
-        }
-        if (unsupported != null) {
-            Toast.makeText(context, unsupportedContent, Toast.LENGTH_SHORT).show()
-        } else {
-            installViewModel.installContent(uris.map(Uri::toString))
-        }
-    }
-
-    val openFirmwareInstall = { firmwarePicker.launch(arrayOf("*/*")) }
-    val openLicenseInstall = { licensePicker.launch(arrayOf("*/*")) }
-    val openPkgInstall = { pkgPicker.launch(arrayOf("*/*")) }
+    val openFirmwareInstall = { fileBrowserMode = BrowserMode.Firmware }
+    val openLicenseInstall = { fileBrowserMode = BrowserMode.License }
+    val openPkgInstall = { fileBrowserMode = BrowserMode.Pkg }
     val openInstallChoiceDialog = {
         showInstallChoiceDialog = true
     }
@@ -785,6 +754,21 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                 showInstallChoiceDialog = false
                 openPkgInstall()
             }
+        )
+    }
+
+    fileBrowserMode?.let { mode ->
+        FileBrowserScreen(
+            mode = mode,
+            onFilesPicked = { paths ->
+                fileBrowserMode = null
+                when (mode) {
+                    BrowserMode.License -> paths.firstOrNull()?.let { installViewModel.installLicense(it) }
+                    BrowserMode.Firmware -> paths.firstOrNull()?.let { installViewModel.installFirmware(it) }
+                    BrowserMode.Pkg -> installViewModel.installContent(paths)
+                }
+            },
+            onDismiss = { fileBrowserMode = null }
         )
     }
 

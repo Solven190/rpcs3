@@ -1610,4 +1610,12 @@ This setting is only applied when SPU Decoder is set to Dynamic or LLVM.</string
     <string name="onboarding_permission_storage_desc">Device storage access for direct reading of game files without copying</string>
     <string name="onboarding_permission_storage_grant">Grant Permission</string>
     <string name="onboarding_permission_storage_granted">Permission Granted</string>
+    <string name="file_browser_title_license">License</string>
+    <string name="file_browser_title_pkg">Game content</string>
+    <string name="file_browser_title_firmware">Firmware</string>
+    <string name="file_browser_change_folder">Change folder</string>
+    <string name="file_browser_no_folder">No folder selected</string>
+    <string name="file_browser_choose_folder_hint">Select the folder with games to get started</string>
+    <string name="file_browser_choose_folder">Choose folder</string>
+    <string name="file_browser_install">Install (%1$d)</string>
 </resources>

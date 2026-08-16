@@ -1614,4 +1614,12 @@ Ce paramètre n\'est appliqué que lorsque SPU Decoder est défini sur Dynamic o
     <string name="onboarding_permission_storage_desc">Accès au stockage de l\'appareil pour la lecture directe des jeux sans copie</string>
     <string name="onboarding_permission_storage_grant">Accorder l\'autorisation</string>
     <string name="onboarding_permission_storage_granted">Autorisation accordée</string>
+    <string name="file_browser_title_license">Licence</string>
+    <string name="file_browser_title_pkg">Contenu du jeu</string>
+    <string name="file_browser_title_firmware">Firmware</string>
+    <string name="file_browser_change_folder">Changer de dossier</string>
+    <string name="file_browser_no_folder">Aucun dossier sélectionné</string>
+    <string name="file_browser_choose_folder_hint">Sélectionnez un dossier contenant des jeux pour commencer</string>
+    <string name="file_browser_choose_folder">Choisir un dossier</string>
+    <string name="file_browser_install">Installer (%1$d)</string>
 </resources>

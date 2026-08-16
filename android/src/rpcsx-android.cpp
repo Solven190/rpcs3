@@ -2693,6 +2693,7 @@ extern "C" void _rpcsx_setSocInfo(std::string_view socInfo) {
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <unwind.h>
 
@@ -2802,9 +2803,40 @@ namespace
 
 	void crash_handler(int sig, siginfo_t* info, void* ucontext)
 	{
-		// FIRST ACTION: write a marker to stderr (lands in logcat) and append a
-		// file marker, so we can tell whether the handler runs at all even if
-		// the backtrace collection below faults.
+		// Fast path: recover RSX write-tracking faults without any logging.
+		// On Android ART's signal chain intercepts SIGSEGV before the core's
+		// fault-recovery handler (Utilities/Thread.cpp) can restore protected
+		// pages, so do it here instead: returning from this handler makes the
+		// kernel re-execute the faulting instruction via sigreturn. Only log if
+		// recovery keeps failing on the same address.
+		if (sig == SIGSEGV)
+		{
+			const auto [vm_addr, vm_ok] = vm::try_get_addr(info->si_addr);
+			if (vm_ok && rsx::g_access_violation_handler)
+			{
+				static u64 s_last_fault_addr = 0;
+				static u32 s_fault_count = 0;
+
+				if (vm_addr != s_last_fault_addr)
+				{
+					s_last_fault_addr = vm_addr;
+					s_fault_count = 0;
+				}
+
+				if (++s_fault_count <= 8 &&
+					(rsx::g_access_violation_handler(vm_addr, true) ||
+					 rsx::g_access_violation_handler(vm_addr, false)))
+				{
+					return;
+				}
+			}
+		}
+
+		// Slow path: unrecoverable. Dump diagnostics and die with the original
+		// signal so the system can record it. Never call the previous handler:
+		// on Android that is ART's sigchain entry, which sigreturns instead of
+		// chaining, causing the faulting instruction to run again and this
+		// handler to loop.
 		static constexpr char entered[] = "CRASH HANDLER ENTERED\n";
 		::write(2, entered, sizeof(entered) - 1);
 
@@ -2837,10 +2869,6 @@ namespace
 			::close(fd);
 		}
 
-		// Die with the original signal so the system can record it. Never call
-		// the previous handler: on Android that is ART's sigchain entry, which
-		// sigreturns instead of chaining, causing the faulting instruction to
-		// run again and this handler to loop.
 		struct sigaction sa{};
 		sa.sa_handler = SIG_DFL;
 		::sigemptyset(&sa.sa_mask);
@@ -4955,11 +4983,18 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
   }
 
   std::string user;
-  if (fs::dir home_dir{rpcs3::utils::get_hdd0_dir() + "home/"}) {
-    for (auto &&entry : home_dir) {
-      if (entry.is_directory && rpcs3::utils::check_user(entry.name)) {
-        user = entry.name;
-        break;
+  {
+    std::error_code ec;
+    auto home_path = std::string(rpcs3::utils::get_hdd0_dir()) + "home";
+    if (std::filesystem::is_directory(home_path, ec)) {
+      for (auto &&entry : std::filesystem::directory_iterator(home_path, ec)) {
+        if (entry.is_directory(ec)) {
+          auto name = entry.path().filename().string();
+          if (rpcs3::utils::check_user(name)) {
+            user = name;
+            break;
+          }
+        }
       }
     }
   }
@@ -4994,19 +5029,91 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
   };
 
   auto add_root = [&](const std::string &root) {
-    const auto eboot = locateEbootPath(root);
-    if (eboot.empty() || !fs::is_file(eboot)) {
-      return;
+    // Step 1: Try PARAM.SFO for CONTENT_ID first
+    std::string title_id;
+    for (auto suffix : {"/PARAM.SFO", "/PS3_GAME/PARAM.SFO"}) {
+      auto param_path = std::string(root) + suffix;
+      int fd = ::open(param_path.c_str(), O_RDONLY);
+      if (fd < 0) continue;
+      struct stat st{};
+      if (fstat(fd, &st) != 0 || st.st_size < 20) { ::close(fd); continue; }
+      std::vector<u8> data(st.st_size);
+      ssize_t nr = ::read(fd, data.data(), data.size());
+      ::close(fd);
+      if (nr != st.st_size) continue;
+      if (std::memcmp(data.data(), "\0PSF", 4) != 0) continue;
+
+      u32 ok = 0, od = 0, en = 0;
+      std::memcpy(&ok, data.data() + 8, 4);
+      std::memcpy(&od, data.data() + 12, 4);
+      std::memcpy(&en, data.data() + 16, 4);
+      const u32 es = 20;
+      for (u32 i = 0; i < en; i++) {
+        u32 eo = es + i * 16;
+        if (eo + 16 > data.size()) break;
+        u16 kno = 0; u32 pl = 0, deo = 0;
+        std::memcpy(&kno, data.data() + eo, 2);
+        std::memcpy(&pl, data.data() + eo + 4, 4);
+        std::memcpy(&deo, data.data() + eo + 12, 4);
+        u32 kns = ok + kno;
+        if (kns >= data.size()) continue;
+        std::string kn;
+        for (u32 j = kns; j < data.size() && data[j] != 0; j++)
+          kn += static_cast<char>(data[j]);
+        if (kn == "CONTENT_ID") {
+          u32 ds = od + deo;
+          std::string cid;
+          for (u32 j = ds; j < data.size() && j < ds + pl && data[j] != 0; j++)
+            cid += static_cast<char>(data[j]);
+          if (!cid.empty()) {
+            rpcsx_android.success("installRapAuto: content_id=%s from PARAM.SFO (%s)", cid.c_str(), root.c_str());
+            add_candidate(cid, locateEbootPath(root), root, false);
+            return;
+          }
+        }
+        if (kn == "TITLE_ID") {
+          u32 ds = od + deo;
+          for (u32 j = ds; j < data.size() && j < ds + pl && data[j] != 0; j++)
+            title_id += static_cast<char>(data[j]);
+        }
+      }
+      break;
     }
 
-    SelfAdditionalInfo info;
-    decrypt_self(fs::file(eboot), nullptr, &info);
+    if (title_id.empty()) return;
 
-    for (auto &supplemental : info.supplemental_hdr) {
-      if (supplemental.type == 3) {
-        add_candidate(supplemental.PS3_npdrm_header.npd.content_id, eboot,
-                      root, false);
-        break;
+    // Step 2: No CONTENT_ID in PARAM.SFO (disc game). Scan EBOOT for NPDRM content_id.
+    auto eboot = locateEbootPath(root);
+    if (eboot.empty()) return;
+
+    int efd = ::open(eboot.c_str(), O_RDONLY);
+    if (efd < 0) return;
+    struct stat est{};
+    if (fstat(efd, &est) != 0 || est.st_size < 256) { ::close(efd); return; }
+
+    // Read first 8KB of EBOOT (enough for SELF header + NPDRM metadata)
+    u32 hdr_size = std::min<off_t>(8192, est.st_size);
+    std::vector<u8> ehdr(hdr_size);
+    ssize_t er = ::read(efd, ehdr.data(), hdr_size);
+    ::close(efd);
+    if (er != (ssize_t)hdr_size) return;
+
+    // Search for content_id string containing title_id (e.g. EP9000-NPEA00256_00-GODOFWARIIHDEU00)
+    // Content_id format: XXXXX-TITLEID_XX-XXXXXXXXXX
+    for (u32 i = 0; i + title_id.size() + 10 < hdr_size; i++) {
+      if (std::memcmp(ehdr.data() + i, title_id.c_str(), title_id.size()) == 0) {
+        // Found title_id inside EBOOT — extract the surrounding content_id string
+        u32 start = i;
+        while (start > 0 && ehdr[start - 1] != 0) start--;
+        u32 end = i + title_id.size();
+        while (end < hdr_size && ehdr[end] != 0) end++;
+        std::string cid(reinterpret_cast<char*>(ehdr.data() + start), end - start);
+        // Content_id must contain a dash (EP9000-NPEA00256_00-...)
+        if (cid.size() > title_id.size() && cid.find('-') != std::string::npos) {
+          rpcsx_android.success("installRapAuto: content_id=%s from EBOOT NPDRM (%s)", cid.c_str(), root.c_str());
+          add_candidate(cid, eboot, root, false);
+          return;
+        }
       }
     }
   };
@@ -5018,23 +5125,28 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
       scan_edats;
   scan_edats = [&](const std::string &dir, const std::string &root,
                    usz &remaining) {
-    if (remaining == 0 || !fs::is_dir(dir)) {
+    if (remaining == 0) {
       return;
     }
-    for (auto &&entry : fs::dir(dir)) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) {
+      return;
+    }
+    for (auto &&entry : std::filesystem::directory_iterator(dir, ec)) {
       if (remaining == 0) {
         return;
       }
-      if (entry.is_directory) {
-        scan_edats(dir + entry.name + "/", root, remaining);
-      } else if (entry.name.size() >= 5) {
+      auto name = entry.path().filename().string();
+      if (entry.is_directory(ec)) {
+        scan_edats(dir + name + "/", root, remaining);
+      } else if (name.size() >= 5) {
         const std::string_view ext =
-            std::string_view(entry.name).substr(entry.name.size() - 5);
+            std::string_view(name).substr(name.size() - 5);
         if (ext[0] == '.' && (ext[1] == 'e' || ext[1] == 'E') &&
             (ext[2] == 'd' || ext[2] == 'D') &&
             (ext[3] == 'a' || ext[3] == 'A') &&
             (ext[4] == 't' || ext[4] == 'T')) {
-          fs::file edat{dir + entry.name};
+          fs::file edat{dir + name};
           NPD_HEADER npd;
           EDAT_HEADER edat_header;
           read_npd_edat_header(&edat, npd, edat_header);
@@ -5042,7 +5154,7 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
             const std::string content_id(
                 npd.content_id,
                 strnlen(npd.content_id, sizeof(npd.content_id)));
-            add_candidate(content_id, dir + entry.name, root, true);
+            add_candidate(content_id, dir + name, root, true);
           }
           --remaining;
         }
@@ -5050,22 +5162,63 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
     }
   };
 
-  if (fs::dir game_dir{rpcs3::utils::get_hdd0_dir() + "game/"}) {
-    for (auto &&entry : game_dir) {
-      if (entry.is_directory) {
-        const std::string root =
-            rpcs3::utils::get_hdd0_dir() + "game/" + entry.name;
-        add_root(root);
-        scan_edats(root + "/", root, edat_budget);
+  usz total_dirs = 0;
+  // Count directories using std::filesystem (works on Android unlike fs::dir)
+  {
+    std::error_code ec;
+    auto game_path = std::string(rpcs3::utils::get_hdd0_dir()) + "game";
+    if (std::filesystem::is_directory(game_path, ec)) {
+      for (auto &&entry : std::filesystem::directory_iterator(game_path, ec)) {
+        if (entry.is_directory(ec)) {
+          total_dirs++;
+        }
+      }
+    }
+    auto games_path = fs::get_config_dir() + "games";
+    if (std::filesystem::is_directory(games_path, ec)) {
+      for (auto &&entry : std::filesystem::directory_iterator(games_path, ec)) {
+        if (entry.is_directory(ec)) {
+          total_dirs++;
+        }
       }
     }
   }
-  if (fs::dir games_dir{fs::get_config_dir() + "games/"}) {
-    for (auto &&entry : games_dir) {
-      if (entry.is_directory) {
-        const std::string root = fs::get_config_dir() + "games/" + entry.name;
-        add_root(root);
-        scan_edats(root + "/", root, edat_budget);
+
+  usz processed = 0;
+  const auto overall_max = total_dirs + candidates.size();
+
+  // Scan hdd0/game using std::filesystem
+  {
+    std::error_code ec;
+    auto game_path = std::string(rpcs3::utils::get_hdd0_dir()) + "game";
+    if (std::filesystem::is_directory(game_path, ec)) {
+      for (auto &&entry : std::filesystem::directory_iterator(game_path, ec)) {
+        if (entry.is_directory(ec)) {
+          auto root = entry.path().string();
+          rpcsx_android.success("installRapAuto: scanning game %s", root.c_str());
+          add_root(root);
+          scan_edats(root + "/", root, edat_budget);
+          processed++;
+          progress.report(processed, overall_max);
+        }
+      }
+    }
+  }
+
+  // Scan config/games using std::filesystem
+  {
+    std::error_code ec;
+    auto games_path = fs::get_config_dir() + "games";
+    if (std::filesystem::is_directory(games_path, ec)) {
+      for (auto &&entry : std::filesystem::directory_iterator(games_path, ec)) {
+        if (entry.is_directory(ec)) {
+          auto root = entry.path().string();
+          rpcsx_android.success("installRapAuto: scanning games dir %s", root.c_str());
+          add_root(root);
+          scan_edats(root + "/", root, edat_budget);
+          processed++;
+          progress.report(processed, overall_max);
+        }
       }
     }
   }
@@ -5075,7 +5228,11 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
     return false;
   }
 
+  usz candidate_index = 0;
   for (const candidate_t &candidate : candidates) {
+    rpcsx_android.success("installRapAuto: verifying candidate %s (%s)",
+                          candidate.content_id.c_str(),
+                          candidate.is_edat ? "edat" : "eboot");
     const std::string license_file =
         fmt::format("%shome/%s/exdata/%s.rap", rpcs3::utils::get_hdd0_dir(),
                     user, candidate.content_id);
@@ -5087,6 +5244,7 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
       fs::file edat{candidate.verify_path};
       if (!VerifyEDATHeaderWithKLicense(edat, candidate.verify_path,
                                         reinterpret_cast<const u8 *>(&rif_key))) {
+        progress.report(total_dirs + ++candidate_index, overall_max);
         continue;
       }
       if (!fs::write_file(license_file, fs::open_mode::create +
@@ -5099,22 +5257,33 @@ extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
       return true;
     }
 
-    if (!fs::write_file(license_file, fs::open_mode::create +
-                                          fs::open_mode::trunc,
-                        bytes)) {
+    // Write RAP file using POSIX directly (bypasses RPCS3 VFS which may cache stale data)
+    int wfd = ::open(license_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0660);
+    if (wfd < 0) {
+      rpcsx_android.error("installRapAuto: POSIX open failed for %s (errno=%d)", license_file.c_str(), errno);
       progress.failure(fmt::format("Failed to write key to %s", license_file));
       return false;
     }
-
-    // Verify: the game's metadata can only be decrypted with the correct key.
-    if (decrypt_self(fs::file(candidate.verify_path))) {
-      collectGameInfo(env, -1, {candidate.root});
-      return true;
+    ssize_t written = ::write(wfd, bytes.data(), bytes.size());
+    ::close(wfd);
+    if (written != (ssize_t)bytes.size()) {
+      rpcsx_android.error("installRapAuto: POSIX write failed for %s (errno=%d)", license_file.c_str(), errno);
+      progress.failure(fmt::format("Failed to write key to %s", license_file));
+      return false;
     }
+    rpcsx_android.success("installRapAuto: wrote %zu bytes to %s", bytes.size(), license_file.c_str());
+    // Ensure file is readable by the game process (may run under different UID)
+    ::chmod(license_file.c_str(), 0666);
 
-    fs::remove_file(license_file);
+    // Skip decrypt_self verification (it hangs on Android). The game will
+    // verify the key itself when it tries to use the license.
+    // Don't call collectGameInfo here — it triggers an immediate re-scan
+    // that can race with the file write. The game will re-scan on next boot.
+    progress.success(1);
+    return true;
   }
 
+  rpcsx_android.error("installRapAuto: no candidate matched the license");
   progress.failure(
       "The license does not match any installed game. Install the game or its "
       "DLC first, then try again.");

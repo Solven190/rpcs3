@@ -209,27 +209,51 @@ object Ps3Runtime {
      *  installed games, verifies the key against each EBOOT and names the
      *  license by its content id automatically. */
     fun installRap(context: Context, source: String, contentId: String? = null): Boolean {
-        if (!ensureInitialized(context)) return false
+        Log.d(TAG, "installRap: source=$source, contentId=$contentId")
+        if (!ensureInitialized(context)) {
+            Log.e(TAG, "installRap: ensureInitialized failed")
+            return false
+        }
         val input = File(source)
+        Log.d(TAG, "installRap: input.isFile=${input.isFile}, length=${input.length()}")
         if (!input.isFile || input.length() != 0x10L) {
             throw LicenseInstallException("RAP license must be exactly 16 bytes (invalid or corrupted file)")
         }
 
         if (contentId.isNullOrBlank()) {
+            Log.d(TAG, "installRap: auto-scan mode (no contentId)")
             val failure = AtomicReference<String?>()
             val progressId = ProgressRepository.create { progress ->
+                Log.d(TAG, "installRap: progress failed=${progress.failed}, message=${progress.message}")
                 if (progress.failed) {
                     failure.set(progress.message?.takeIf(String::isNotBlank)
                         ?: "Failed to install the RAP license")
                 }
             }
             val accepted = openDescriptor(context, source)?.use { descriptor ->
+                Log.d(TAG, "installRap: fd=${descriptor.fd}, calling installRapAuto")
                 RPCSX.instance.installRapAuto(descriptor.fd, progressId)
             } ?: false
+            Log.d(TAG, "installRap: installRapAuto returned $accepted")
             ProgressRepository.cancel(progressId)
             if (!accepted) {
-                throw LicenseInstallException(failure.get() ?: "Failed to install the RAP license")
+                val msg = failure.get() ?: "Failed to install the RAP license"
+                Log.e(TAG, "installRap: failed: $msg")
+                throw LicenseInstallException(msg)
             }
+            // Re-write RAP files using Java to ensure correct UID/permissions
+            val user = runCatching { RPCSX.instance.getUser() }.getOrNull().orEmpty().ifBlank { USER_ID }
+            val exdataDir = File(RPCSX.getHdd0Dir(), "home/$user/exdata")
+            if (exdataDir.isDirectory) {
+                exdataDir.listFiles()?.filter { it.extension == "rap" }?.forEach { rapFile ->
+                    val dest = File(exdataDir, rapFile.name)
+                    input.inputStream().use { src ->
+                        dest.outputStream().use { dst -> src.copyTo(dst) }
+                    }
+                    Log.d(TAG, "installRap: re-wrote ${rapFile.name} via Java (UID=${android.os.Process.myUid()})")
+                }
+            }
+            Log.d(TAG, "installRap: success")
             return true
         }
 

@@ -1609,4 +1609,12 @@ Over-Under 更接近原生立体声输出，但不太受支持。</string>
     <string name="onboarding_permission_storage_desc">用于直接读取游戏文件而无需复制的设备存储访问权限</string>
     <string name="onboarding_permission_storage_grant">授予权限</string>
     <string name="onboarding_permission_storage_granted">已授予权限</string>
+    <string name="file_browser_title_license">许可证</string>
+    <string name="file_browser_title_pkg">游戏内容</string>
+    <string name="file_browser_title_firmware">固件</string>
+    <string name="file_browser_change_folder">更改文件夹</string>
+    <string name="file_browser_no_folder">未选择文件夹</string>
+    <string name="file_browser_choose_folder_hint">选择包含游戏的文件夹以开始</string>
+    <string name="file_browser_choose_folder">选择文件夹</string>
+    <string name="file_browser_install">安装 (%1$d)</string>
 </resources>

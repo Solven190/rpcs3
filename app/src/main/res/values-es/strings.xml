@@ -1614,4 +1614,12 @@ Esta configuración solo se aplica cuando SPU Decoder está configurado en Diná
     <string name="onboarding_permission_storage_desc">Acceso al almacenamiento del dispositivo para lectura directa de juegos sin copiar</string>
     <string name="onboarding_permission_storage_grant">Conceder permiso</string>
     <string name="onboarding_permission_storage_granted">Permiso concedido</string>
+    <string name="file_browser_title_license">Licencia</string>
+    <string name="file_browser_title_pkg">Contenido del juego</string>
+    <string name="file_browser_title_firmware">Firmware</string>
+    <string name="file_browser_change_folder">Cambiar carpeta</string>
+    <string name="file_browser_no_folder">No se ha seleccionado carpeta</string>
+    <string name="file_browser_choose_folder_hint">Selecciona una carpeta con juegos para empezar</string>
+    <string name="file_browser_choose_folder">Elegir carpeta</string>
+    <string name="file_browser_install">Instalar (%1$d)</string>
 </resources>

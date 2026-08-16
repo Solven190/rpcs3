@@ -1610,4 +1610,12 @@ Diese Einstellung wird nur angewendet, wenn der SPU-Decoder auf „Dynamisch“ 
     <string name="onboarding_permission_storage_desc">Gerätespeicherzugriff zum direkten Lesen von Spieldateien ohne Kopieren</string>
     <string name="onboarding_permission_storage_grant">Berechtigung erteilen</string>
     <string name="onboarding_permission_storage_granted">Berechtigung erteilt</string>
+    <string name="file_browser_title_license">Lizenz</string>
+    <string name="file_browser_title_pkg">Spielinhalte</string>
+    <string name="file_browser_title_firmware">Firmware</string>
+    <string name="file_browser_change_folder">Ordner ändern</string>
+    <string name="file_browser_no_folder">Kein Ordner ausgewählt</string>
+    <string name="file_browser_choose_folder_hint">Wählen Sie einen Ordner mit Spielen, um zu beginnen</string>
+    <string name="file_browser_choose_folder">Ordner wählen</string>
+    <string name="file_browser_install">Installieren (%1$d)</string>
 </resources>

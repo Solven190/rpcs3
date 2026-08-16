@@ -13,6 +13,8 @@
 #include "Crypto/unedat.h"
 
 #include <charconv>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <thread>
 
 LOG_CHANNEL(sys_log, "SYS");
@@ -384,12 +386,34 @@ namespace rpcs3::utils
 
 		std::string rap_path;
 
-		for (auto&& entry : fs::dir(home_dir))
+		// Use POSIX opendir/readdir on Android (fs::dir doesn't work on external storage)
+		DIR* dir = opendir(home_dir.c_str());
+		if (dir)
 		{
-			if (entry.is_directory && check_user(entry.name))
+			struct dirent* ent;
+			while ((ent = readdir(dir)) != nullptr)
 			{
-				rap_path = fmt::format("%s/%s/exdata/%s.rap", home_dir, entry.name, rap);
-				if (fs::is_file(rap_path))
+				if (ent->d_type == DT_DIR && check_user(ent->d_name))
+				{
+					rap_path = fmt::format("%s/%s/exdata/%s.rap", home_dir, ent->d_name, rap);
+					struct stat st;
+					if (stat(rap_path.c_str(), &st) == 0 && S_ISREG(st.st_mode))
+					{
+						closedir(dir);
+						return rap_path;
+					}
+				}
+			}
+			closedir(dir);
+		}
+		else
+		{
+			// Fallback: try common user IDs
+			for (const char* uid : {"00000001", "00000000"})
+			{
+				rap_path = fmt::format("%s/%s/exdata/%s.rap", home_dir, uid, rap);
+				struct stat st;
+				if (stat(rap_path.c_str(), &st) == 0 && S_ISREG(st.st_mode))
 				{
 					return rap_path;
 				}

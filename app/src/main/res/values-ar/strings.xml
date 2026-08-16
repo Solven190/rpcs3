@@ -1603,4 +1603,12 @@
     <string name="onboarding_permission_storage_desc">الوصول إلى مساحة تخزين الجهاز لقراءة ملفات الألعاب مباشرة دون نسخ</string>
     <string name="onboarding_permission_storage_grant">منح الإذن</string>
     <string name="onboarding_permission_storage_granted">تم منح الإذن</string>
+    <string name="file_browser_title_license">الترخيص</string>
+    <string name="file_browser_title_pkg">محتوى اللعبة</string>
+    <string name="file_browser_title_firmware">البرنامج الثابت</string>
+    <string name="file_browser_change_folder">تغيير المجلد</string>
+    <string name="file_browser_no_folder">لم يتم تحديد مجلد</string>
+    <string name="file_browser_choose_folder_hint">اختر مجلد الألعاب للبدء</string>
+    <string name="file_browser_choose_folder">اختيار مجلد</string>
+    <string name="file_browser_install">تثبيت (%1$d)</string>
 </resources>

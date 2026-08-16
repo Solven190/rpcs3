@@ -124,6 +124,7 @@ fun OnboardingScreen(
 
     val preferences = remember(context) { AppPreferences(context) }
     var selectedGamesFolder by remember { mutableStateOf(preferences.gameDirectories.firstOrNull()) }
+    var showFolderPicker by remember { mutableStateOf(false) }
     val gamesFolderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
@@ -319,7 +320,14 @@ fun OnboardingScreen(
                             startFirmwareDownload = firmwareDownloadViewModel::start,
                             cancelFirmwareDownload = firmwareDownloadViewModel::cancel,
                             selectedGamesFolder = selectedGamesFolder,
-                            onPickGamesFolder = { gamesFolderPicker.launch(null) }
+                            onPickGamesFolder = {
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+                                    && android.os.Environment.isExternalStorageManager()) {
+                                    showFolderPicker = true
+                                } else {
+                                    gamesFolderPicker.launch(null)
+                                }
+                            }
                         )
                     }
                 }
@@ -375,11 +383,28 @@ fun OnboardingScreen(
                                 Text(stringResource(R.string.onboarding_get_started))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
-                            }
-                        }
-                    }
                 }
             }
+        }
+
+        if (showFolderPicker) {
+            val defaultDir = java.io.File("/storage/emulated/0/PS3").let {
+                if (it.isDirectory) it else java.io.File("/storage/emulated/0")
+            }
+            com.sbro.emucorec.ui.files.FolderPickerDialog(
+                title = stringResource(R.string.onboarding_status_choose_folder),
+                initialDir = defaultDir,
+                onFolderSelected = { dir ->
+                    preferences.addGameDirectory(dir.absolutePath)
+                    selectedGamesFolder = dir.absolutePath
+                    InstallStateBus.notifyCompleted()
+                    showFolderPicker = false
+                },
+                onDismiss = { showFolderPicker = false }
+            )
+        }
+    }
+}
         }
 
         AnimatedVisibility(

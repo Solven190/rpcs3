@@ -1610,4 +1610,12 @@ Esta configuração só é aplicada quando o Decodificador SPU está definido co
     <string name="onboarding_permission_storage_desc">Acesso ao armazenamento do dispositivo para leitura direta de jogos sem copiar</string>
     <string name="onboarding_permission_storage_grant">Conceder permissão</string>
     <string name="onboarding_permission_storage_granted">Permissão concedida</string>
+    <string name="file_browser_title_license">Licença</string>
+    <string name="file_browser_title_pkg">Conteúdo do jogo</string>
+    <string name="file_browser_title_firmware">Firmware</string>
+    <string name="file_browser_change_folder">Alterar pasta</string>
+    <string name="file_browser_no_folder">Nenhuma pasta selecionada</string>
+    <string name="file_browser_choose_folder_hint">Selecione uma pasta com jogos para começar</string>
+    <string name="file_browser_choose_folder">Escolher pasta</string>
+    <string name="file_browser_install">Instalar (%1$d)</string>
 </resources>

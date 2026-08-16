@@ -5,6 +5,8 @@
 #include "Emu/System.h"
 #include "Emu/system_utils.hpp"
 #include "Crypto/unzip.h"
+#include <fcntl.h>
+#include <unistd.h>
 
 inline u8 Read8(const fs::file& f)
 {
@@ -1297,6 +1299,21 @@ bool SELFDecrypter::GetKeyFromRap(const char* content_id, u8* npdrm_key)
 
 	if (!rap_file)
 	{
+		// Fallback: try POSIX open on Android (fs::file may not work on external storage)
+		int fd = ::open(rap_path.c_str(), O_RDONLY);
+		if (fd >= 0)
+		{
+			auto nread = ::read(fd, rap_key.data(), rap_key.size());
+			::close(fd);
+			if (nread == 16)
+			{
+				self_log.notice("Read RAP file via POSIX fallback: %s", rap_path);
+				rap_to_rif(rap_key.data(), npdrm_key);
+				return true;
+			}
+		}
+		self_log.error("POSIX fallback: open=%d for %s (errno=%d)", fd, rap_path, errno);
+
 		self_log.fatal("Failed to locate the game license file: %s."
 				  "\nEnsure the .rap license file is placed in the dev_hdd0/home/%s/exdata folder with a lowercase file extension."
 				  "\nIf you need assistance on dumping the license file from your PS3, read our quickstart guide: https://rpcs3.net/quickstart", rap_path, Emu.GetUsr());
