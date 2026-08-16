@@ -129,6 +129,7 @@ CMakeUserPresets.json
 
 # EmuCoreC local files (not part of the repository)
 local.properties
+/assets/
 /IGDB/
 /workers/
 /public/
