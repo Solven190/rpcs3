@@ -76,6 +76,7 @@ class RPCSX {
     external fun installFw(fd: Int, progressId: Long): Boolean
     external fun install(fd: Int, progressId: Long): Boolean
     external fun installKey(fd: Int, requestId: Long, gamePath: String): Boolean
+    external fun installRapAuto(fd: Int, progressId: Long): Boolean
     external fun boot(path: String): Int
     external fun surfaceEvent(surface: Surface, event: Int): Boolean
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean

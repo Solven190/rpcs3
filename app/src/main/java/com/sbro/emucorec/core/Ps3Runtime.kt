@@ -18,6 +18,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.ArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 object Ps3Runtime {
     private const val TAG = "Ps3Runtime"
@@ -204,7 +205,9 @@ object Ps3Runtime {
             RPCSX.instance.pkgContentId(descriptor.fd)
         }
 
-    /** Installs a standalone RAP by its content-id filename, as RPCS3's exdata import does. */
+    /** Installs a RAP license. When [contentId] is null the core scans the
+     *  installed games, verifies the key against each EBOOT and names the
+     *  license by its content id automatically. */
     fun installRap(context: Context, source: String, contentId: String? = null): Boolean {
         if (!ensureInitialized(context)) return false
         val input = File(source)
@@ -212,7 +215,25 @@ object Ps3Runtime {
             throw LicenseInstallException("RAP license must be exactly 16 bytes (invalid or corrupted file)")
         }
 
-        val resolvedContentId = contentId?.trim().orEmpty().ifBlank { input.nameWithoutExtension.trim() }
+        if (contentId.isNullOrBlank()) {
+            val failure = AtomicReference<String?>()
+            val progressId = ProgressRepository.create { progress ->
+                if (progress.failed) {
+                    failure.set(progress.message?.takeIf(String::isNotBlank)
+                        ?: "Failed to install the RAP license")
+                }
+            }
+            val accepted = openDescriptor(context, source)?.use { descriptor ->
+                RPCSX.instance.installRapAuto(descriptor.fd, progressId)
+            } ?: false
+            ProgressRepository.cancel(progressId)
+            if (!accepted) {
+                throw LicenseInstallException(failure.get() ?: "Failed to install the RAP license")
+            }
+            return true
+        }
+
+        val resolvedContentId = contentId.trim()
         if (!resolvedContentId.matches(contentIdPattern)) {
             throw LicenseInstallException(
                 "RAP license name must be its content ID (e.g. UP0001-BLUS30423_00-DLC0000000001.rap). " +

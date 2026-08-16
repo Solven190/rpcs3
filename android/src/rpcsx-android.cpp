@@ -4738,6 +4738,190 @@ extern "C" bool _rpcsx_installKey(JNIEnv *env, int fd, long progressId,
   return false;
 }
 
+// Install a standalone RAP by scanning the installed games for the one it
+// unlocks. The 16-byte RAP carries only the encrypted key, so its content id
+// can only be recovered by testing the key against each installed game's EBOOT:
+// the first candidate whose metadata decrypts is the owner. This removes the
+// need to rename the .rap to its content id by hand.
+extern "C" bool _rpcsx_installRapAuto(JNIEnv *env, int fd, long progressId) {
+  Progress progress(env, progressId);
+
+  auto file = fs::file::from_native_handle(fd);
+  AtExit atExit{[&] { file.release_handle(); }};
+
+  std::vector<std::uint8_t> bytes(0x10);
+  if (file.read(bytes.data(), bytes.size()) != bytes.size()) {
+    progress.failure("RAP license must be exactly 16 bytes");
+    return false;
+  }
+
+  std::string user;
+  if (fs::dir home_dir{rpcs3::utils::get_hdd0_dir() + "home/"}) {
+    for (auto &&entry : home_dir) {
+      if (entry.is_directory && rpcs3::utils::check_user(entry.name)) {
+        user = entry.name;
+        break;
+      }
+    }
+  }
+  if (user.empty()) {
+    user = Emu.GetUsr();
+  }
+  if (user.empty()) {
+    progress.failure("No PS3 user profile found");
+    return false;
+  }
+
+  struct candidate_t {
+    std::string content_id;
+    std::string verify_path; // EBOOT.BIN or an .edat carrying this content id
+    std::string root;
+    bool is_edat = false;
+  };
+  std::vector<candidate_t> candidates;
+
+  auto add_candidate = [&](const std::string &content_id,
+                           const std::string &verify_path,
+                           const std::string &root, bool is_edat) {
+    if (content_id.empty()) {
+      return;
+    }
+    for (const candidate_t &candidate : candidates) {
+      if (candidate.content_id == content_id) {
+        return; // already seen
+      }
+    }
+    candidates.push_back({content_id, verify_path, root, is_edat});
+  };
+
+  auto add_root = [&](const std::string &root) {
+    const auto eboot = locateEbootPath(root);
+    if (eboot.empty() || !fs::is_file(eboot)) {
+      return;
+    }
+
+    SelfAdditionalInfo info;
+    decrypt_self(fs::file(eboot), nullptr, &info);
+
+    for (auto &supplemental : info.supplemental_hdr) {
+      if (supplemental.type == 3) {
+        add_candidate(supplemental.PS3_npdrm_header.npd.content_id, eboot,
+                      root, false);
+        break;
+      }
+    }
+  };
+
+  // DLC often ships without an EBOOT (only .edat payloads), so also index the
+  // NPDRM content ids of the .edat files under each game.
+  usz edat_budget = 2000;
+  std::function<void(const std::string &, const std::string &, usz &)>
+      scan_edats;
+  scan_edats = [&](const std::string &dir, const std::string &root,
+                   usz &remaining) {
+    if (remaining == 0 || !fs::is_dir(dir)) {
+      return;
+    }
+    for (auto &&entry : fs::dir(dir)) {
+      if (remaining == 0) {
+        return;
+      }
+      if (entry.is_directory) {
+        scan_edats(dir + entry.name + "/", root, remaining);
+      } else if (entry.name.size() >= 5) {
+        const std::string_view ext =
+            std::string_view(entry.name).substr(entry.name.size() - 5);
+        if (ext[0] == '.' && (ext[1] == 'e' || ext[1] == 'E') &&
+            (ext[2] == 'd' || ext[2] == 'D') &&
+            (ext[3] == 'a' || ext[3] == 'A') &&
+            (ext[4] == 't' || ext[4] == 'T')) {
+          fs::file edat{dir + entry.name};
+          NPD_HEADER npd;
+          EDAT_HEADER edat_header;
+          read_npd_edat_header(&edat, npd, edat_header);
+          if (npd.magic == "NPD\0"_u32) {
+            const std::string content_id(
+                npd.content_id,
+                strnlen(npd.content_id, sizeof(npd.content_id)));
+            add_candidate(content_id, dir + entry.name, root, true);
+          }
+          --remaining;
+        }
+      }
+    }
+  };
+
+  if (fs::dir game_dir{rpcs3::utils::get_hdd0_dir() + "game/"}) {
+    for (auto &&entry : game_dir) {
+      if (entry.is_directory) {
+        const std::string root =
+            rpcs3::utils::get_hdd0_dir() + "game/" + entry.name;
+        add_root(root);
+        scan_edats(root + "/", root, edat_budget);
+      }
+    }
+  }
+  if (fs::dir games_dir{fs::get_config_dir() + "games/"}) {
+    for (auto &&entry : games_dir) {
+      if (entry.is_directory) {
+        const std::string root = fs::get_config_dir() + "games/" + entry.name;
+        add_root(root);
+        scan_edats(root + "/", root, edat_budget);
+      }
+    }
+  }
+
+  if (candidates.empty()) {
+    progress.failure("No installed game found to match the license against");
+    return false;
+  }
+
+  for (const candidate_t &candidate : candidates) {
+    const std::string license_file =
+        fmt::format("%shome/%s/exdata/%s.rap", rpcs3::utils::get_hdd0_dir(),
+                    user, candidate.content_id);
+
+    if (candidate.is_edat) {
+      // Cheap header check: derive the rif key from the RAP and validate the
+      // EDAT's NPD hashes without decrypting the data.
+      u128 rif_key = GetEdatRifKeyFromRapFile(fs::make_stream(bytes));
+      fs::file edat{candidate.verify_path};
+      if (!VerifyEDATHeaderWithKLicense(edat, candidate.verify_path,
+                                        reinterpret_cast<const u8 *>(&rif_key))) {
+        continue;
+      }
+      if (!fs::write_file(license_file, fs::open_mode::create +
+                                            fs::open_mode::trunc,
+                          bytes)) {
+        progress.failure(fmt::format("Failed to write key to %s", license_file));
+        return false;
+      }
+      collectGameInfo(env, -1, {candidate.root});
+      return true;
+    }
+
+    if (!fs::write_file(license_file, fs::open_mode::create +
+                                          fs::open_mode::trunc,
+                        bytes)) {
+      progress.failure(fmt::format("Failed to write key to %s", license_file));
+      return false;
+    }
+
+    // Verify: the game's metadata can only be decrypted with the correct key.
+    if (decrypt_self(fs::file(candidate.verify_path))) {
+      collectGameInfo(env, -1, {candidate.root});
+      return true;
+    }
+
+    fs::remove_file(license_file);
+  }
+
+  progress.failure(
+      "The license does not match any installed game. Install the game or its "
+      "DLC first, then try again.");
+  return false;
+}
+
 extern "C" std::string _rpcsx_systemInfo() {
   std::string result;
 

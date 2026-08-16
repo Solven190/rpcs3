@@ -38,6 +38,8 @@ struct RPCSXApi {
   bool (*install)(JNIEnv *env, int fd, long progressId);
   bool (*installKey)(JNIEnv *env, int fd, long progressId,
                      std::string_view gamePath);
+  bool (*installRapAuto)(JNIEnv *env, int fd, long progressId);
+  jstring (*pkgContentId)(JNIEnv *env, jint fd);
   std::string (*systemInfo)();
   void (*loginUser)(std::string_view userId);
   std::string (*getUser)();
@@ -102,6 +104,8 @@ struct RPCSXLibrary : RPCSXApi {
     result.getDirInstallPath = reinterpret_cast<decltype(getDirInstallPath)>(dlsym(handle, "_rpcsx_getDirInstallPath"));
     result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_rpcsx_install"));
     result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_rpcsx_installKey"));
+    result.installRapAuto = reinterpret_cast<decltype(installRapAuto)>(dlsym(handle, "_rpcsx_installRapAuto"));
+    result.pkgContentId = reinterpret_cast<decltype(pkgContentId)>(dlsym(handle, "_rpcsx_pkgContentId"));
     result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_rpcsx_systemInfo"));
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
     result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
@@ -253,6 +257,16 @@ Java_net_rpcsx_RPCSX_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installKey(
     JNIEnv *env, jobject, jint fd, jlong progressId, jstring gamePath) {
   return rpcsxLib.installKey(env, fd, progressId, unwrap(env, gamePath));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installRapAuto(
+    JNIEnv *env, jobject, jint fd, jlong progressId) {
+  return rpcsxLib.installRapAuto(env, fd, progressId);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_pkgContentId(JNIEnv *env, jobject, jint fd) {
+  return rpcsxLib.pkgContentId(env, fd);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
