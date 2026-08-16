@@ -33,6 +33,21 @@ namespace rsx
 
 	void mm_protect(void* ptr, u64 length, utils::protection prot)
 	{
+#ifdef __ANDROID__
+		// The core's SIGSEGV recovery is unavailable on Android: ART's signal
+		// chain intercepts the fault before the handler in Thread.cpp can
+		// restore the page, so any read/write of a protected page kills the
+		// process. RSX write-tracking protects pages to catch Cell writes, but
+		// the pages are also routinely read (vertex data) and written (video
+		// decoder output) by the guest. Never apply the actual protection; the
+		// texture cache's logical state is unaffected (it tracks protection
+		// itself), only the hardware page permissions are kept read/write.
+		if (prot != utils::protection::rw && prot != utils::protection::wx)
+		{
+			return;
+		}
+#endif
+
 		if (g_cfg.video.disable_async_host_memory_manager)
 		{
 			utils::memory_protect(ptr, length, prot);

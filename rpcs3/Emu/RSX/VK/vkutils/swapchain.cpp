@@ -146,6 +146,19 @@ namespace vk
 		}
 	}
 
+	// On Android the surface can be briefly unavailable while it is being
+	// reconfigured (orientation change, SurfaceView re-attach). The WSI queries
+	// then return VK_ERROR_SURFACE_LOST_KHR, which is NOT fatal: the caller
+	// retries on the next flip.
+	static bool swapchain_surface_error(VkResult result)
+	{
+#ifdef __ANDROID__
+		return result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+#else
+		return false;
+#endif
+	}
+
 	std::pair<VkSurfaceCapabilitiesKHR, bool> swapchain_WSI::init_surface_capabilities()
 	{
 #ifdef _WIN32
@@ -187,7 +200,16 @@ namespace vk
 		}
 #endif
 		VkSurfaceCapabilitiesKHR surface_descriptors = {};
-		CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.gpu(), m_surface, &surface_descriptors));
+		if (VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.gpu(), m_surface, &surface_descriptors);
+			result != VK_SUCCESS)
+		{
+			if (swapchain_surface_error(result))
+			{
+				rsx_log.warning("Swapchain: Failed to query surface capabilities (0x%x). Will retry on the next flip.", static_cast<int>(result));
+				return { {}, false };
+			}
+			CHECK_RESULT(result);
+		}
 		return { surface_descriptors, false };
 	}
 
@@ -226,10 +248,28 @@ namespace vk
 		}
 
 		u32 nb_available_modes = 0;
-		CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, nullptr));
+		if (VkResult result = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, nullptr);
+			result != VK_SUCCESS)
+		{
+			if (swapchain_surface_error(result))
+			{
+				rsx_log.warning("Swapchain: Failed to query present modes (0x%x). Will retry on the next flip.", static_cast<int>(result));
+				return false;
+			}
+			CHECK_RESULT(result);
+		}
 
 		std::vector<VkPresentModeKHR> present_modes(nb_available_modes);
-		CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, present_modes.data()));
+		if (VkResult result = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, present_modes.data());
+			result != VK_SUCCESS)
+		{
+			if (swapchain_surface_error(result))
+			{
+				rsx_log.warning("Swapchain: Failed to query present modes (0x%x). Will retry on the next flip.", static_cast<int>(result));
+				return false;
+			}
+			CHECK_RESULT(result);
+		}
 
 		VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
 		std::vector<VkPresentModeKHR> preferred_modes;
@@ -323,7 +363,16 @@ namespace vk
 		rsx_log.notice("Swapchain: requesting full screen exclusive mode %d.", static_cast<int>(full_screen_exclusive_info.fullScreenExclusive));
 #endif
 
-		_vkCreateSwapchainKHR(dev, &swap_info, nullptr, &m_vk_swapchain);
+		if (VkResult result = _vkCreateSwapchainKHR(dev, &swap_info, nullptr, &m_vk_swapchain);
+			result != VK_SUCCESS)
+		{
+#ifdef __ANDROID__
+			rsx_log.warning("Swapchain: vkCreateSwapchainKHR failed (0x%x). Will retry on the next flip.", static_cast<int>(result));
+			return false;
+#else
+			CHECK_RESULT(result);
+#endif
+		}
 
 		if (old_swapchain)
 		{

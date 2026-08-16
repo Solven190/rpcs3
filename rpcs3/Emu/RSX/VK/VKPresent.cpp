@@ -620,6 +620,19 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			reinitialize_swapchain();
 			ensure(m_current_frame, "Could not reinitialize swapchain after VK_ERROR_OUT_OF_DATE_KHR signal!");
 			continue;
+		case VK_ERROR_SURFACE_LOST_KHR:
+			// Android can invalidate the surface at any moment during reconfiguration
+			// (orientation change, SurfaceView re-attach, transient window switches).
+			// The old swapchain is dead until the surface comes back, so recover
+			// instead of treating it as a fatal error.
+			rsx_log.warning("vkAcquireNextImageKHR failed with VK_ERROR_SURFACE_LOST_KHR. Flip request ignored until surface is recreated.");
+			swapchain_unavailable = true;
+			if (!reinitialize_swapchain() || !m_current_frame)
+			{
+				// Surface is gone; the next flip will retry (see the retry loop at the top of flip()).
+				return;
+			}
+			continue;
 		default:
 			vk::die_with_error(status);
 		}

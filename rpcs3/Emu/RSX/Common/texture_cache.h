@@ -3275,8 +3275,14 @@ namespace rsx
 					if ((dst_w * dst_bpp) != dst.pitch)
 					{
 						// Keep Cell from touching the range we need
+						// NOTE: On Android the core's SIGSEGV recovery is unavailable
+						// (ART's signal chain intercepts the fault), so a PROT_NONE
+						// page read by Cell/RSX would kill the process. Skip the
+						// protection there and accept the minor data race instead.
+#ifndef __ANDROID__
 						const auto prot_range = dst_range.to_page_range();
 						utils::memory_protect(vm::base(prot_range.start), prot_range.length(), utils::protection::no);
+#endif
 
 						force_dma_load = true;
 					}
@@ -3313,8 +3319,11 @@ namespace rsx
 					{
 						// HACK: workaround for data race with Cell
 						// Pre-lock the memory range we'll be touching, then load with super_ptr
+						// NOTE: Skipped on Android; see above for why.
+#ifndef __ANDROID__
 						const auto prot_range = dst_range.to_page_range();
 						utils::memory_protect(vm::base(prot_range.start), prot_range.length(), utils::protection::no);
+#endif
 
 						const auto pitch_in_block = dst.pitch / dst_bpp;
 						std::vector<rsx::subresource_layout> subresource_layout;

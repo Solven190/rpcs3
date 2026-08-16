@@ -38,6 +38,13 @@ extern rsx::frame_capture_data frame_capture;
 
 namespace rsx
 {
+	// Set by rsx::thread when the renderer is created. Called by the core's fault
+	// recovery when a page fault occurs on an address the renderer manages (e.g.
+	// write-tracking pages). The Android build invokes it from its own crash
+	// handler, because ART's signal chain prevents SIGSEGV from reaching the
+	// core's signal handler.
+	extern std::function<bool(u32 addr, bool is_writing)> g_access_violation_handler;
+
 	class RSXDMAWriter;
 
 	struct context;

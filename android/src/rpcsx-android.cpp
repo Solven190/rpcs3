@@ -2681,6 +2681,199 @@ extern "C" void _rpcsx_setSocInfo(std::string_view socInfo) {
   g_android_soc_info = std::string(socInfo);
 }
 
+// ---------------------------------------------------------------------------
+// Crash logging.
+//
+// debuggerd on some OEM devices silently stops writing tombstones once
+// /data/tombstones is full (32 slots), so native crashes leave no trace at
+// all. Install a chained handler on top of the core's signal handlers and
+// append a backtrace to RPCSX.crash.log before letting the previous handler
+// run (it either recovers the fault or terminates the process).
+// ---------------------------------------------------------------------------
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <unwind.h>
+
+namespace
+{
+	// Minimal signal-safe writer: appends formatted text to an open fd using
+	// only a small stack buffer, so it survives even if the crash was a stack
+	// overflow.
+	struct crash_fd_writer
+	{
+		int fd;
+		char buf[256];
+		usz len = 0;
+
+		explicit crash_fd_writer(int fd_) : fd(fd_) {}
+
+		void flush()
+		{
+			if (fd >= 0 && len)
+			{
+				// write() can return a partial count; loop until everything is
+				// written, otherwise diagnostics get truncated mid-line.
+				const char* p = buf;
+				usz remaining = len;
+				while (remaining)
+				{
+					const ssize_t n = ::write(fd, p, remaining);
+					if (n <= 0)
+					{
+						if (n < 0 && errno == EINTR) continue;
+						break;
+					}
+					p += n;
+					remaining -= static_cast<usz>(n);
+				}
+				len = 0;
+			}
+		}
+
+		void append(const char* s, usz n)
+		{
+			while (n)
+			{
+				const usz chunk = std::min(n, sizeof(buf) - 1 - len);
+				std::memcpy(buf + len, s, chunk);
+				len += chunk;
+				s += chunk;
+				n -= chunk;
+				if (len >= sizeof(buf) - 1) flush();
+			}
+		}
+
+		void append(const char* s) { append(s, std::strlen(s)); }
+
+		void append_hex(u64 value)
+		{
+			char tmp[24];
+			char* p = tmp + sizeof(tmp);
+			*--p = '\0';
+			if (!value) *--p = '0';
+			while (value)
+			{
+				*--p = "0123456789abcdef"[value & 0xF];
+				value >>= 4;
+			}
+			append(p);
+		}
+
+		void append_int(s64 value)
+		{
+			char tmp[32];
+			std::snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(value));
+			append(tmp);
+		}
+	};
+
+	struct trace_arg
+	{
+		crash_fd_writer* w;
+		int count = 0;
+	};
+
+	_Unwind_Reason_Code crash_trace_cb(struct _Unwind_Context* ctx, void* arg)
+	{
+		auto* a = static_cast<trace_arg*>(arg);
+		const u64 pc = _Unwind_GetIP(ctx);
+		if (!pc || a->count >= 64) return _URC_END_OF_STACK;
+
+		a->w->append("  #");
+		a->w->append_int(a->count++);
+		a->w->append(" 0x");
+		a->w->append_hex(pc);
+
+		Dl_info info{};
+		if (dladdr(reinterpret_cast<void*>(pc), &info) && info.dli_sname)
+		{
+			a->w->append("  ");
+			a->w->append(info.dli_sname);
+		}
+		a->w->append("\n");
+		return _URC_NO_REASON;
+	}
+
+	// Path is baked in during install_crash_handler(), before any crash can
+	// happen, so the handler never touches std::string.
+	static char g_crash_log_path[512];
+
+	void crash_handler(int sig, siginfo_t* info, void* ucontext)
+	{
+		// FIRST ACTION: write a marker to stderr (lands in logcat) and append a
+		// file marker, so we can tell whether the handler runs at all even if
+		// the backtrace collection below faults.
+		static constexpr char entered[] = "CRASH HANDLER ENTERED\n";
+		::write(2, entered, sizeof(entered) - 1);
+
+		const int fd = ::open(g_crash_log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+		crash_fd_writer w(fd);
+		w.append("=== EmuCoreC crash ===\n");
+		w.append("signal: ");
+		w.append_int(sig);
+		w.append(" address: 0x");
+		w.append_hex(reinterpret_cast<u64>(info->si_addr));
+		w.append("\n");
+		w.flush();
+
+		char thread_name[64]{};
+		pthread_getname_np(pthread_self(), thread_name, sizeof(thread_name));
+		if (thread_name[0])
+		{
+			w.append("thread: ");
+			w.append(thread_name);
+			w.append("\n");
+			w.flush();
+		}
+
+		trace_arg arg{&w, 0};
+		_Unwind_Backtrace(crash_trace_cb, &arg);
+
+		w.flush();
+		if (fd >= 0)
+		{
+			::close(fd);
+		}
+
+		// Die with the original signal so the system can record it. Never call
+		// the previous handler: on Android that is ART's sigchain entry, which
+		// sigreturns instead of chaining, causing the faulting instruction to
+		// run again and this handler to loop.
+		struct sigaction sa{};
+		sa.sa_handler = SIG_DFL;
+		::sigemptyset(&sa.sa_mask);
+		::sigaction(sig, &sa, nullptr);
+		sigset_t set;
+		sigemptyset(&set);
+		sigaddset(&set, sig);
+		::sigprocmask(SIG_UNBLOCK, &set, nullptr);
+		::raise(sig);
+		::_exit(128 + sig);
+	}
+
+	// Called from initialize AND from every boot: the core's own signal
+	// handlers (Utilities/Thread.cpp) are installed lazily by a static
+	// initializer that may run after this, so re-assert ours on top.
+	void install_crash_handler()
+	{
+		std::snprintf(g_crash_log_path, sizeof(g_crash_log_path), "%sRPCSX.crash.log", g_android_cache_dir.c_str());
+
+		struct sigaction sa{};
+		sa.sa_sigaction = crash_handler;
+		sa.sa_flags = SA_SIGINFO;
+		::sigemptyset(&sa.sa_mask);
+
+		for (const int sig : {SIGSEGV, SIGABRT, SIGBUS, SIGILL})
+		{
+			::sigaction(sig, &sa, nullptr);
+		}
+
+		rpcsx_android.notice("crash handler installed, log: %s", g_crash_log_path);
+	}
+} // namespace
+
 extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                                   std::string_view user) {
   auto rootDirStr = fix_dir_path(std::string(rootDir));
@@ -2740,6 +2933,8 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     log_file = logs::make_file_listener(fs::get_log_dir() + "RPCSX.log",
                                         stats.avail_free / 4);
   }
+
+  install_crash_handler();
 
   // Mesa driver options, from <root>/driver_env.txt, one NAME=VALUE per line.
   //
@@ -2974,6 +3169,10 @@ extern "C" void _rpcsx_shutdown() {
 }
 
 extern "C" int _rpcsx_boot(std::string_view path_) {
+  // Re-assert the crash handler: the core's own signal handlers are installed
+  // lazily by a static initializer that may run after our first install.
+  install_crash_handler();
+
   // Taken FIRST, before the Kill below, and held across the whole boot.
   //
   // Emu.Kill() spawns an "Emulation Join Thread" that joins every emulator thread. It is

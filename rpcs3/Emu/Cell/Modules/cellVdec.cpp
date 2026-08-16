@@ -5,6 +5,7 @@
 #include "Emu/Cell/lv2/sys_sync.h"
 #include "Emu/Cell/lv2/sys_ppu_thread.h"
 #include "Emu/Cell/lv2/sys_process.h"
+#include "Emu/RSX/RSXThread.h"
 #include "Emu/savestate_utils.hpp"
 #include "sysPrxForUser.h"
 #include "util/media_utils.h"
@@ -1825,6 +1826,20 @@ error_code cellVdecGetPictureExt(ppu_thread& ppu, u32 handle, vm::cptr<CellVdecP
 		}
 
 		sws_scale(vdec->sws, in_data, in_line, 0, h, out_data, out_line);
+
+		// The texture cache normally detects guest writes to texture memory via
+		// page protection, which is disabled on Android (the core cannot recover
+		// SIGSEGV there, see MM.cpp). Notify the cache explicitly so video
+		// frames are re-uploaded to the GPU instead of showing stale content.
+		if (::rsx::g_access_violation_handler)
+		{
+			const u32 frame_size = alpha_plane ? w * h * 4 : (out_f == AV_PIX_FMT_UYVY422 ? w * h * 2 : w * h * 3 / 2);
+			const u32 frame_start = outBuff.addr();
+			for (u32 page = frame_start & ~0xFFF; page < frame_start + frame_size; page += 0x1000)
+			{
+				::rsx::g_access_violation_handler(page, true);
+			}
+		}
 	}
 
 	return CELL_OK;
