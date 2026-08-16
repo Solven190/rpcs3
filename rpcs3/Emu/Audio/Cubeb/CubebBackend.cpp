@@ -1,7 +1,9 @@
 #include "Emu/Audio/Cubeb/CubebBackend.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdarg>
+#include <thread>
 #include "util/logs.hpp"
 #include "Emu/Audio/audio_device_enumerator.h"
 
@@ -102,7 +104,13 @@ bool CubebBackend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize
 		return false;
 	}
 
-	Close();
+	CloseNoLock();
+
+	// A previous error (e.g. a Bluetooth device change tearing the stream down
+	// mid-game) may have flagged this backend for recreation. Open() creates a
+	// brand-new stream from scratch, so the old error state no longer applies.
+	m_reset_req = false;
+
 	std::lock_guard lock{m_cb_mutex};
 
 	const bool use_default_device = dev_id.empty() || dev_id == audio_device_enumerator::DEFAULT_DEV_ID;
@@ -166,26 +174,63 @@ bool CubebBackend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize
 	stream_param.prefs = m_dev_collection_cb_enabled && device.handle ? CUBEB_STREAM_PREF_DISABLE_DEVICE_SWITCHING : CUBEB_STREAM_PREF_NONE;
 
 	u32 min_latency{};
+#if defined(__ANDROID__)
+	// cubeb's AAudio backend implements cubeb_get_min_latency() by opening and
+	// closing a probe stream. When the default output is a Bluetooth sink that is
+	// still settling (codec negotiation), that probe can block or fail for reasons
+	// unrelated to our actual stream. Our fixed 512-frame (~10.7ms) latency is
+	// well within AAudio's capabilities, so skip the probe on Android.
+#else
 	if (int err = cubeb_get_min_latency(m_ctx, &stream_param, &min_latency))
 	{
 		Cubeb.error("cubeb_get_min_latency() failed: %i", err);
 		min_latency = 0;
 	}
+#endif
 
 	const u32 stream_latency = std::max(static_cast<u32>(AUDIO_MIN_LATENCY * get_sampling_rate()), min_latency);
 
-	if (int err = cubeb_stream_init(m_ctx, &m_stream, "Main stream", nullptr, nullptr, device.handle, &stream_param, stream_latency, data_cb, state_cb, this))
-	{
-		Cubeb.error("cubeb_stream_init() failed: %i", err);
-		m_stream = nullptr;
-		return false;
-	}
+	// On Android the default output device can be a Bluetooth sink that is still
+	// negotiating its codec when a game boots. AAudio then fails the stream
+	// creation (or the start) transiently. Retry the whole thing a few times so
+	// a boot-time failure does not leave the emulator with a dead backend.
+	constexpr u32 max_open_attempts = 3;
 
-	if (int err = cubeb_stream_start(m_stream))
+	for (u32 attempt = 1; attempt <= max_open_attempts; attempt++)
 	{
-		Cubeb.error("cubeb_stream_start() failed: %i", err);
-		Close();
-		return false;
+		if (int err = cubeb_stream_init(m_ctx, &m_stream, "Main stream", nullptr, nullptr, device.handle, &stream_param, stream_latency, data_cb, state_cb, this))
+		{
+			Cubeb.error("cubeb_stream_init() failed: %i (attempt %u/%u)", err, attempt, max_open_attempts);
+			m_stream = nullptr;
+
+			if (attempt < max_open_attempts)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds{100});
+				continue;
+			}
+
+			return false;
+		}
+
+		if (int err = cubeb_stream_start(m_stream))
+		{
+			Cubeb.error("cubeb_stream_start() failed: %i (attempt %u/%u)", err, attempt, max_open_attempts);
+
+			// Must not call Close() here: m_cb_mutex is already held by this
+			// thread and Close() would deadlock on it. CloseNoLock() tears the
+			// stream down without touching that mutex.
+			CloseNoLock();
+
+			if (attempt < max_open_attempts)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds{100});
+				continue;
+			}
+
+			return false;
+		}
+
+		break;
 	}
 
 	if (int err = cubeb_stream_set_volume(m_stream, 1.0))
@@ -198,6 +243,16 @@ bool CubebBackend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize
 
 void CubebBackend::Close()
 {
+	CloseNoLock();
+}
+
+// Stops and destroys the current stream and resets all backend state.
+// Does not acquire m_cb_mutex, so it can safely be called while the caller
+// already holds it (Open() does). This is safe because cubeb_stream_destroy()
+// only returns after every callback of the stream has finished, so no thread
+// can be reading the state we reset below.
+void CubebBackend::CloseNoLock()
+{
 	if (m_stream != nullptr)
 	{
 		if (int err = cubeb_stream_stop(m_stream))
@@ -208,12 +263,9 @@ void CubebBackend::Close()
 		cubeb_stream_destroy(m_stream);
 	}
 
-	{
-		std::lock_guard lock{m_cb_mutex};
-		m_stream = nullptr;
-		m_playing = false;
-		m_last_sample.fill(0);
-	}
+	m_stream = nullptr;
+	m_playing = false;
+	m_last_sample.fill(0);
 
 	std::lock_guard lock{m_state_cb_mutex};
 	m_default_device.clear();

@@ -82,6 +82,12 @@ void cell_audio_config::reset(bool backend_changed)
 	if (backend->Open(raw.audio_device, freq, sample_size, req_ch_cnt, raw.channel_layout))
 	{
 		cb_frame_len = backend->GetCallbackFrameLen();
+
+		// Bluetooth (A2DP) sinks report several hundred milliseconds of latency.
+		// Feeding that into the buffering math would exceed MAX_AUDIO_BUFFERS and
+		// abort the audio thread, so cap what we are willing to buffer for.
+		cb_frame_len = std::min(cb_frame_len, 0.1); // 100ms
+
 		ch_cnt = backend->get_channels();
 		ch_layout = backend->get_channel_layout();
 		cellAudio.notice("Opened audio backend (sampling_rate=%d, sample_size=%d, channels=%d, layout=%s)", backend->get_sampling_rate(), backend->get_sample_size(), backend->get_channels(), backend->get_channel_layout());
@@ -109,7 +115,11 @@ void cell_audio_config::reset(bool backend_changed)
 	maximum_block_period = (6 * audio_block_period) / 5;
 
 	desired_full_buffers = buffering_enabled ? static_cast<u32>(desired_buffer_duration / audio_block_period) + 3 : 2;
-	num_allocated_buffers = desired_full_buffers + EXTRA_AUDIO_BUFFERS;
+
+	// The ringbuffer pool is fixed at MAX_AUDIO_BUFFERS. Clamp the count so a
+	// device with huge latency (e.g. Bluetooth A2DP) can never trip the
+	// "MAX_AUDIO_BUFFERS is too small" fatal error in audio_ringbuffer.
+	num_allocated_buffers = std::min(desired_full_buffers + EXTRA_AUDIO_BUFFERS, static_cast<u32>(MAX_AUDIO_BUFFERS));
 
 	fully_untouched_timeout = static_cast<u64>(audio_block_period) * 2;
 	partially_untouched_timeout = static_cast<u64>(audio_block_period) * 4;

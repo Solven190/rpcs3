@@ -23,6 +23,11 @@ public:
 	bool Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize sample_size, AudioChannelCnt ch_cnt, audio_channel_layout layout) override;
 	void Close() override;
 
+	// Stops and destroys the current stream and resets all backend state.
+	// Does not acquire m_cb_mutex, so it can safely be called while the caller
+	// already holds it (Open() does). Never call this from a cubeb callback.
+	void CloseNoLock();
+
 	f64 GetCallbackFrameLen() override;
 
 	void Play() override;
