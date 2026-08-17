@@ -59,6 +59,12 @@ jobs:
           sdkmanager --install "ndk;29.0.14206865"
           sdkmanager --install "cmake;3.30.5"
 
+      - name: Export NDK_DIR for FFmpeg build script
+        shell: powershell
+        run: |
+          $ndkPath = "$env:ANDROID_SDK_ROOT\ndk\29.0.14206865" -replace '\\', '/'
+          "NDK_DIR=$ndkPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Cache MinGW-w64 toolchain
         id: cache-mingw
         uses: actions/cache@v4
@@ -106,7 +112,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/build/ffmpeg-android
-          key: ffmpeg-android-${{ hashFiles('android/build-ffmpeg.sh') }}
+          key: ffmpeg-android-${{ hashFiles('.ci/build-windows-clang.sh') }}
 
       - name: Cache native core build
         uses: actions/cache@v4
@@ -171,8 +177,14 @@ jobs:
           name: EmuCoreC-release-apk
           path: app/build/outputs/apk/release/*.apk
 
-      - name: Print FFmpeg config.log on failure
-        if: failure()
+      - name: Dump FFmpeg config.log (debug)
+        if: always()
         shell: powershell
         run: |
-          Get-Content "app/build/ffmpeg-android/ffbuild/config.log" -Tail 100 -ErrorAction SilentlyContinue
+          $log = Get-ChildItem -Path . -Recurse -Filter "config.log" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($log) {
+            Write-Host "Found: $($log.FullName)"
+            Get-Content $log.FullName -Tail 150
+          } else {
+            Write-Host "No config.log found anywhere in the workspace."
+          }
