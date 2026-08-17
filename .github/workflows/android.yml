@@ -105,43 +105,77 @@ jobs:
           Add-MpPreference -ExclusionPath "$env:TEMP"
           Set-MpPreference -DisableRealtimeMonitoring $true
 
+      # ============================================
+      # خطوات Python المحسنة بالكامل
+      # ============================================
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # تحديد إصدار محدد بدلاً من 3.x
+          python-version: '3.11'
+          architecture: 'x64'
 
-      # إضافة خطوة لتثبيت Python في مسار ثابت
-      - name: Fix Python path for CMake
+      - name: Verify and configure Python
         shell: powershell
         run: |
-          $pythonPath = "$env:pythonLocation"
-          $pythonExe = "$pythonPath\python.exe"
-          Write-Host "Python location: $pythonPath"
+          # الحصول على مسار Python الفعلي
+          $pythonExe = (Get-Command python).Source
+          $pythonDir = Split-Path $pythonExe -Parent
+          
+          Write-Host "========================================"
           Write-Host "Python executable: $pythonExe"
+          Write-Host "Python directory: $pythonDir"
+          Write-Host "========================================"
           
-          # التحقق من وجود Python
-          if (Test-Path $pythonExe) {
-            & $pythonExe --version
-          } else {
-            Write-Host "Python not found at expected location, searching..."
-            $pythonExe = (Get-Command python).Source
-            Write-Host "Found Python at: $pythonExe"
-          }
+          # التحقق من أن Python يعمل
+          & $pythonExe --version
+          & $pythonExe -c "import sys; print(f'Sys executable: {sys.executable}')"
           
-          # تعيين المتغيرات البيئية
-          "Python3_ROOT_DIR=$pythonPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "Python_ROOT_DIR=$pythonPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "Python_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CMAKE_PREFIX_PATH=$pythonPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # تعيين المتغيرات البيئية بشكل صريح
+          Add-Content -Path $env:GITHUB_ENV -Value "Python3_ROOT_DIR=$pythonDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "Python_ROOT_DIR=$pythonDir"
+          Add-Content -Path $env:GITHUB_ENV -Value "Python3_EXECUTABLE=$pythonExe"
+          Add-Content -Path $env:GITHUB_ENV -Value "Python_EXECUTABLE=$pythonExe"
+          Add-Content -Path $env:GITHUB_ENV -Value "PYTHON_EXECUTABLE=$pythonExe"
+          Add-Content -Path $env:GITHUB_ENV -Value "PYTHON3_EXECUTABLE=$pythonExe"
+          
+          # إضافة Python إلى PATH في بداية المسار
+          Add-Content -Path $env:GITHUB_PATH -Value $pythonDir
+          Add-Content -Path $env:GITHUB_PATH -Value "$pythonDir\Scripts"
+          
+          # إنشاء ملف تكوين CMake لإجبار Python
+          $cmakePythonConfig = @"
+          # Force Python detection for LLVM
+          set(Python3_EXECUTABLE "$pythonExe" CACHE FILEPATH "Python executable" FORCE)
+          set(Python_EXECUTABLE "$pythonExe" CACHE FILEPATH "Python executable" FORCE)
+          set(Python3_ROOT_DIR "$pythonDir" CACHE PATH "Python root" FORCE)
+          set(Python_ROOT_DIR "$pythonDir" CACHE PATH "Python root" FORCE)
+          set(Python3_FOUND TRUE CACHE BOOL "Python found" FORCE)
+          set(Python_FOUND TRUE CACHE BOOL "Python found" FORCE)
+          set(Python3_Interpreter_FOUND TRUE CACHE BOOL "Python interpreter found" FORCE)
+          "@
+          
+          $cmakeConfigPath = "${{ github.workspace }}\python-config.cmake"
+          Set-Content -Path $cmakeConfigPath -Value $cmakePythonConfig -Encoding ascii
+          Write-Host "Created CMake config: $cmakeConfigPath"
+          
+          # إضافة متغير لتوجيه CMake لاستخدام هذا الملف
+          Add-Content -Path $env:GITHUB_ENV -Value "CMAKE_TOOLCHAIN_FILE=$cmakeConfigPath"
 
-      # إضافة مسار Python إلى PATH
-      - name: Add Python to PATH
+      - name: Set Python in environment for Gradle
         shell: powershell
         run: |
-          $pythonPath = "$env:pythonLocation"
-          $pythonPath = $pythonPath -replace '\\', '/'
-          "$pythonPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          "$pythonPath/Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $pythonExe = (Get-Command python).Source
+          $pythonDir = Split-Path $pythonExe -Parent
+          
+          # إنشاء ملف properties لـ Gradle
+          @"
+          systemProp.python.executable=$pythonExe
+          systemProp.python.root.dir=$pythonDir
+          systemProp.Python3_EXECUTABLE=$pythonExe
+          systemProp.Python_ROOT_DIR=$pythonDir
+          "@ | Out-File -FilePath "${{ github.workspace }}\gradle.properties" -Append -Encoding ascii
+          
+          Write-Host "Gradle properties updated with Python path"
 
       - name: Configure local.properties
         shell: powershell
@@ -206,42 +240,67 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
-      # تصحيح إعدادات CMake لاستخدام Python الصحيح
-      - name: Configure CMake for LLVM
+      # ============================================
+      # إصلاح CMakeLists.txt لـ LLVM مؤقتاً
+      # ============================================
+      - name: Patch LLVM CMakeLists.txt for Python
         shell: powershell
         run: |
-          $pythonExe = "$env:pythonLocation\python.exe"
-          if (-not (Test-Path $pythonExe)) {
-            $pythonExe = (Get-Command python).Source
-          }
-          
-          # إنشاء ملف toolchain مع تعيين Python
-          $toolchainContent = @"
-          set(Python3_EXECUTABLE $pythonExe)
-          set(Python_EXECUTABLE $pythonExe)
-          set(Python3_ROOT_DIR $env:pythonLocation)
-          set(Python_ROOT_DIR $env:pythonLocation)
+          $llvmCmakePath = "${{ github.workspace }}\3rdparty\llvm\llvm\llvm\CMakeLists.txt"
+          if (Test-Path $llvmCmakePath) {
+            $content = Get-Content $llvmCmakePath -Raw
+            # إضافة متغيرات Python قبل find_package
+            $pythonOverride = @"
+          # Force Python detection - added by CI
+          if(NOT DEFINED Python3_EXECUTABLE)
+              set(Python3_EXECUTABLE "$env:Python3_EXECUTABLE" CACHE FILEPATH "Python executable")
+          endif()
+          if(NOT DEFINED Python_EXECUTABLE)
+              set(Python_EXECUTABLE "$env:Python_EXECUTABLE" CACHE FILEPATH "Python executable")
+          endif()
+          if(NOT DEFINED Python3_ROOT_DIR)
+              set(Python3_ROOT_DIR "$env:Python3_ROOT_DIR" CACHE PATH "Python root")
+          endif()
+          if(NOT DEFINED Python_ROOT_DIR)
+              set(Python_ROOT_DIR "$env:Python_ROOT_DIR" CACHE PATH "Python root")
+          endif()
+          set(Python3_FOUND TRUE)
+          set(Python_FOUND TRUE)
           "@
-          
-          $toolchainPath = "${{ github.workspace }}/android/toolchain.cmake"
-          # إضافة إلى ملف toolchain الموجود إذا كان موجوداً
-          if (Test-Path $toolchainPath) {
-            Add-Content -Path $toolchainPath -Value "`n$toolchainContent"
+            
+            # البحث عن find_package(Python3) وإضافة التصحيح قبله
+            if ($content -match "find_package\(Python3") {
+              $content = $content -replace "find_package\(Python3", "$pythonOverride`nfind_package(Python3"
+              Set-Content -Path $llvmCmakePath -Value $content -Encoding ascii
+              Write-Host "Patched LLVM CMakeLists.txt for Python"
+            } else {
+              Write-Host "Could not find find_package(Python3) in LLVM CMakeLists.txt"
+            }
           } else {
-            Set-Content -Path $toolchainPath -Value $toolchainContent
+            Write-Host "LLVM CMakeLists.txt not found at: $llvmCmakePath"
           }
 
       - name: Assemble release
         shell: powershell
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_21_X64 }}
-          CMAKE_PREFIX_PATH: ${{ env.pythonLocation }}
-          Python3_ROOT_DIR: ${{ env.pythonLocation }}
-          Python_ROOT_DIR: ${{ env.pythonLocation }}
+          # تمرير جميع متغيرات Python
+          Python3_ROOT_DIR: ${{ env.Python3_ROOT_DIR }}
+          Python_ROOT_DIR: ${{ env.Python_ROOT_DIR }}
+          Python3_EXECUTABLE: ${{ env.Python3_EXECUTABLE }}
+          Python_EXECUTABLE: ${{ env.Python_EXECUTABLE }}
+          PYTHON_EXECUTABLE: ${{ env.PYTHON_EXECUTABLE }}
         run: |
-          # التحقق من Python قبل البناء
+          # تأكيد أن Python يعمل قبل البناء
+          Write-Host "========================================"
+          Write-Host "Python environment check:"
           python --version
-          .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache
+          python -c "import sys; print(f'Python executable: {sys.executable}')"
+          python -c "import site; print(f'Python site packages: {site.getsitepackages()}')"
+          Write-Host "========================================"
+          
+          # تشغيل البناء
+          .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -249,14 +308,45 @@ jobs:
           name: EmuCoreC-release-apk
           path: app/build/outputs/apk/release/*.apk
 
-      - name: Dump FFmpeg config.log (debug)
+      - name: Dump build logs (debug)
         if: always()
         shell: powershell
         run: |
+          Write-Host "========================================"
+          Write-Host "Checking for build logs..."
+          
+          # البحث عن config.log
           $log = Get-ChildItem -Path . -Recurse -Filter "config.log" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($log) {
-            Write-Host "Found: $($log.FullName)"
+            Write-Host "Found config.log: $($log.FullName)"
             Get-Content $log.FullName -Tail 150
-          } else {
-            Write-Host "No config.log found anywhere in the workspace."
           }
+          
+          # البحث عن CMakeOutput.log
+          $cmakeLog = Get-ChildItem -Path . -Recurse -Filter "CMakeOutput.log" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($cmakeLog) {
+            Write-Host "Found CMakeOutput.log: $($cmakeLog.FullName)"
+            Get-Content $cmakeLog.FullName -Tail 100
+          }
+          
+          # البحث عن CMakeError.log
+          $cmakeError = Get-ChildItem -Path . -Recurse -Filter "CMakeError.log" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($cmakeError) {
+            Write-Host "Found CMakeError.log: $($cmakeError.FullName)"
+            Get-Content $cmakeError.FullName -Tail 100
+          }
+          
+          Write-Host "========================================"
+
+      - name: Save build environment info
+        if: always()
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host "Build environment information:"
+          Write-Host "Python location: $env:pythonLocation"
+          Write-Host "Python3_ROOT_DIR: $env:Python3_ROOT_DIR"
+          Write-Host "Python_EXECUTABLE: $env:Python_EXECUTABLE"
+          Write-Host "JAVA_HOME: $env:JAVA_HOME"
+          Write-Host "ANDROID_SDK_ROOT: $env:ANDROID_SDK_ROOT"
+          Write-Host "========================================"
