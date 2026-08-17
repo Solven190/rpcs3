@@ -73,6 +73,18 @@ jobs:
             Copy-Item -Recurse -Force $src "$target\mingw64"
           }
 
+      - name: Add MinGW to PATH
+        shell: powershell
+        run: |
+          "$env:LOCALAPPDATA\mingw\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Disable Windows Defender scanning
+        shell: powershell
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:TEMP"
+          Set-MpPreference -DisableRealtimeMonitoring $true
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -153,3 +165,9 @@ jobs:
         with:
           name: EmuCoreC-release-apk
           path: app/build/outputs/apk/release/*.apk
+
+      - name: Print FFmpeg config.log on failure
+        if: failure()
+        shell: powershell
+        run: |
+          Get-Content "app/build/ffmpeg-android/ffbuild/config.log" -Tail 100 -ErrorAction SilentlyContinue
