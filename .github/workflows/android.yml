@@ -79,7 +79,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           $url = "https://sourceforge.net/projects/winlibs-mingw/files/13.2.0posix-17.0.6-11.0.1-ucrt-r4/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r4.7z/download"
           $archive = "$env:RUNNER_TEMP\mingw.7z"
-          Invoke-WebRequest -Uri $url -OutFile $archive -UserAgent "Mozilla/5.0"
+          curl.exe -L --fail --retry 3 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o $archive $url
+          if ($LASTEXITCODE -ne 0) { throw "curl download failed with exit code $LASTEXITCODE" }
           $target = "$env:LOCALAPPDATA\mingw"
           New-Item -ItemType Directory -Force -Path $target | Out-Null
           & "C:\Program Files\7-Zip\7z.exe" x $archive -o"$target" -y
