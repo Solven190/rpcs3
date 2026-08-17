@@ -84,7 +84,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $target | Out-Null
           & "C:\Program Files\7-Zip\7z.exe" x $archive -o"$target" -y
           if (-not (Test-Path "$target\mingw64\bin\gcc.exe")) {
-            throw "gcc.exe not found after extraction — archive layout unexpected"
+            throw "gcc.exe not found after extraction - archive layout unexpected"
           }
 
       - name: Add MinGW to PATH
