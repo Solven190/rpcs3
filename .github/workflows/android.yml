@@ -1,4 +1,4 @@
-name: Build
+name: Build APK
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -26,13 +26,31 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Cache NDK & CMake
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_ROOT }}\ndk\29.0.14206865
+            ${{ env.ANDROID_SDK_ROOT }}\cmake\3.30.5
+          key: ndk-cmake-29.0.14206865-3.30.5
+
       - name: Install NDK & CMake
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
         shell: cmd
         run: |
           sdkmanager --install "ndk;29.0.14206865"
           sdkmanager --install "cmake;3.30.5"
 
+      - name: Cache MinGW-w64 toolchain
+        id: cache-mingw
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LOCALAPPDATA }}\mingw
+          key: mingw-13.2.0
+
       - name: Install MinGW-w64 toolchain
+        if: steps.cache-mingw.outputs.cache-hit != 'true'
         shell: powershell
         run: |
           choco install mingw -y --version=13.2.0 --force
@@ -52,6 +70,21 @@ jobs:
         shell: powershell
         run: |
           "sdk.dir=$env:ANDROID_SDK_ROOT" | Out-File -Encoding ascii local.properties
+
+      - name: Cache FFmpeg build
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: app/build/ffmpeg-android
+          key: ffmpeg-android-${{ hashFiles('android/build-ffmpeg.sh') }}
+
+      - name: Cache native core build
+        uses: actions/cache@v4
+        with:
+          path: app/build/emucorec-core-build
+          key: core-build-${{ hashFiles('android/CMakeLists.txt', 'android/configure-core.cmd', 'rpcs3/**') }}
+          restore-keys: |
+            core-build-
 
       # Ephemeral key, regenerated on every run — build verification only, not for distribution.
       - name: Generate signing key
@@ -100,7 +133,7 @@ jobs:
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
         run: |
-          .\gradlew.bat :app:assembleRelease --stacktrace
+          .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
