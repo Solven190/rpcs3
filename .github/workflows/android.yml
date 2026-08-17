@@ -108,12 +108,40 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.11'  # تحديد إصدار محدد بدلاً من 3.x
 
-      - name: Point CMake to the correct Python interpreter
+      # إضافة خطوة لتثبيت Python في مسار ثابت
+      - name: Fix Python path for CMake
         shell: powershell
         run: |
-          "Python3_ROOT_DIR=$env:pythonLocation" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $pythonPath = "$env:pythonLocation"
+          $pythonExe = "$pythonPath\python.exe"
+          Write-Host "Python location: $pythonPath"
+          Write-Host "Python executable: $pythonExe"
+          
+          # التحقق من وجود Python
+          if (Test-Path $pythonExe) {
+            & $pythonExe --version
+          } else {
+            Write-Host "Python not found at expected location, searching..."
+            $pythonExe = (Get-Command python).Source
+            Write-Host "Found Python at: $pythonExe"
+          }
+          
+          # تعيين المتغيرات البيئية
+          "Python3_ROOT_DIR=$pythonPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "Python_ROOT_DIR=$pythonPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "Python_EXECUTABLE=$pythonExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_PREFIX_PATH=$pythonPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # إضافة مسار Python إلى PATH
+      - name: Add Python to PATH
+        shell: powershell
+        run: |
+          $pythonPath = "$env:pythonLocation"
+          $pythonPath = $pythonPath -replace '\\', '/'
+          "$pythonPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$pythonPath/Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Configure local.properties
         shell: powershell
@@ -178,11 +206,41 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
+      # تصحيح إعدادات CMake لاستخدام Python الصحيح
+      - name: Configure CMake for LLVM
+        shell: powershell
+        run: |
+          $pythonExe = "$env:pythonLocation\python.exe"
+          if (-not (Test-Path $pythonExe)) {
+            $pythonExe = (Get-Command python).Source
+          }
+          
+          # إنشاء ملف toolchain مع تعيين Python
+          $toolchainContent = @"
+          set(Python3_EXECUTABLE $pythonExe)
+          set(Python_EXECUTABLE $pythonExe)
+          set(Python3_ROOT_DIR $env:pythonLocation)
+          set(Python_ROOT_DIR $env:pythonLocation)
+          "@
+          
+          $toolchainPath = "${{ github.workspace }}/android/toolchain.cmake"
+          # إضافة إلى ملف toolchain الموجود إذا كان موجوداً
+          if (Test-Path $toolchainPath) {
+            Add-Content -Path $toolchainPath -Value "`n$toolchainContent"
+          } else {
+            Set-Content -Path $toolchainPath -Value $toolchainContent
+          }
+
       - name: Assemble release
         shell: powershell
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_21_X64 }}
+          CMAKE_PREFIX_PATH: ${{ env.pythonLocation }}
+          Python3_ROOT_DIR: ${{ env.pythonLocation }}
+          Python_ROOT_DIR: ${{ env.pythonLocation }}
         run: |
+          # التحقق من Python قبل البناء
+          python --version
           .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache
 
       - name: Upload artifact
