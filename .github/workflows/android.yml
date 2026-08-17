@@ -70,16 +70,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.LOCALAPPDATA }}\mingw
-          key: mingw-winlibs-13.2.0-ucrt-r4
+          key: mingw-nixman-13.2.0-rt_v11-rev1
 
-      - name: Install MinGW-w64 toolchain (WinLibs GCC 13.2.0)
+      - name: Install MinGW-w64 toolchain (GCC 13.2.0)
         if: steps.cache-mingw.outputs.cache-hit != 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://sourceforge.net/projects/winlibs-mingw/files/13.2.0posix-17.0.6-11.0.1-ucrt-r4/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r4.7z/download"
+          $url = "https://github.com/niXman/mingw-builds-binaries/releases/download/13.2.0-rt_v11-rev1/x86_64-13.2.0-release-posix-seh-ucrt-rt_v11-rev1.7z"
           $archive = "$env:RUNNER_TEMP\mingw.7z"
-          curl.exe -L --fail --retry 3 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o $archive $url
+          curl.exe -L --fail --retry 3 -o $archive $url
           if ($LASTEXITCODE -ne 0) { throw "curl download failed with exit code $LASTEXITCODE" }
           $target = "$env:LOCALAPPDATA\mingw"
           New-Item -ItemType Directory -Force -Path $target | Out-Null
