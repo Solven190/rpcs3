@@ -81,7 +81,8 @@ jobs:
       - name: Configure local.properties
         shell: powershell
         run: |
-          "sdk.dir=$env:ANDROID_SDK_ROOT" | Out-File -Encoding ascii local.properties
+          $sdkPath = $env:ANDROID_SDK_ROOT -replace '\\', '/'
+          "sdk.dir=$sdkPath" | Out-File -Encoding ascii local.properties
 
       - name: Cache FFmpeg build
         id: cache-ffmpeg
