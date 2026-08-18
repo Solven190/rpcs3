@@ -8,7 +8,7 @@ on:
 jobs:
   release:
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
@@ -17,19 +17,30 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Cache Submodules
+      - name: Cache git submodules
         uses: actions/cache@v4
         with:
           path: .git/modules
           key: submodules-${{ hashFiles('.gitmodules') }}
 
-      - name: Setup JDK 21
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 21
+          distribution: 'temurin'
+          java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Cache NDK & CMake
@@ -39,81 +50,137 @@ jobs:
           path: |
             ${{ env.ANDROID_SDK_ROOT }}\ndk\29.0.14206865
             ${{ env.ANDROID_SDK_ROOT }}\cmake\3.30.5
-          key: ndk-cmake-${{ runner.os }}-29.0.14206865-3.30.5
+          key: ndk-cmake-29.0.14206865-3.30.5
 
-      - name: Install Dependencies
+      - name: Install NDK & CMake
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         shell: cmd
         run: |
           sdkmanager --install "ndk;29.0.14206865"
           sdkmanager --install "cmake;3.30.5"
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: 3.11
-
-      - name: Configure Python
+      - name: Export NDK_DIR for FFmpeg build script
         shell: powershell
         run: |
-          $python = (Get-Command python).Source
-          $pythonDir = Split-Path $python -Parent
-          $targetDir = "C:\Users\runneradmin\AppData\Local\Programs\Python"
-          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-          $linkPath = "$targetDir\Python312"
-          if (Test-Path $linkPath) { Remove-Item $linkPath -Recurse -Force }
-          cmd /c mklink /J "$linkPath" "$pythonDir"
-          "Python3_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "Python_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $ndkPath = "$env:ANDROID_SDK_ROOT\ndk\29.0.14206865" -replace '\\', '/'
+          "NDK_DIR=$ndkPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Setup CCache
-        uses: hendrikmuhs/ccache-action@v1
-        with:
-          key: ccache-${{ runner.os }}
-          max-size: 2G
-
-      - name: Configure NDK
-        shell: powershell
-        run: |
-          $ndk = "$env:ANDROID_SDK_ROOT\ndk\29.0.14206865" -replace '\\', '/'
-          "NDK_DIR=$ndk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Configure Local Properties
-        shell: powershell
-        run: |
-          $sdk = $env:ANDROID_SDK_ROOT -replace '\\', '/'
-          "sdk.dir=$sdk" | Out-File -Encoding ascii local.properties
-
-      - name: Cache Build Artifacts
+      - name: Cache MinGW-w64 toolchain
+        id: cache-mingw
         uses: actions/cache@v4
         with:
-          path: |
-            app/build/ffmpeg-android
-            app/build/emucorec-core-build
-            app/build/emucorec-core
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: build-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '.gitmodules') }}
-          restore-keys: |
-            build-${{ runner.os }}-
+          path: ${{ env.LOCALAPPDATA }}\mingw
+          key: mingw-nixman-13.2.0-rt_v11-rev1
 
-      - name: Generate Signing Key
+      - name: Install MinGW-w64 toolchain (GCC 13.2.0)
+        if: steps.cache-mingw.outputs.cache-hit != 'true'
         shell: powershell
         run: |
-          & "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/niXman/mingw-builds-binaries/releases/download/13.2.0-rt_v11-rev1/x86_64-13.2.0-release-posix-seh-ucrt-rt_v11-rev1.7z"
+          $archive = "$env:RUNNER_TEMP\mingw.7z"
+          curl.exe -L --fail --retry 3 -o $archive $url
+          if ($LASTEXITCODE -ne 0) { throw "curl download failed with exit code $LASTEXITCODE" }
+          $target = "$env:LOCALAPPDATA\mingw"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          & "C:\Program Files\7-Zip\7z.exe" x $archive -o"$target" -y
+          if (-not (Test-Path "$target\mingw64\bin\gcc.exe")) {
+            throw "gcc.exe not found after extraction - archive layout unexpected"
+          }
+
+      - name: Add MinGW to PATH
+        shell: powershell
+        run: |
+          "$env:LOCALAPPDATA\mingw\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify MinGW GCC version
+        shell: powershell
+        run: |
+          & "$env:LOCALAPPDATA\mingw\mingw64\bin\gcc.exe" --version
+
+      - name: Disable Windows Defender scanning
+        shell: powershell
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:TEMP"
+          Set-MpPreference -DisableRealtimeMonitoring $true
+
+      # ====== الحل الأساسي لمشكلة Python ======
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # الحل السحري: استخدام Python من المسار الصحيح
+      - name: Fix Python path for CMake
+        shell: powershell
+        run: |
+          # الحصول على المسار الفعلي لـ Python
+          $pythonPath = (Get-Command python).Source
+          $pythonDir = Split-Path $pythonPath -Parent
+          
+          # تعيين متغيرات البيئة
+          "Python3_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "Python_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          
+          # إنشاء رابط رمزي للمسار الذي يبحث عنه CMake
+          $targetDir = "C:\Users\runneradmin\AppData\Local\Programs\Python"
+          if (-not (Test-Path $targetDir)) {
+            New-Item -ItemType Directory -Path $targetDir -Force
+          }
+          
+          # إنشاء مجلد Python312 كرابط للمسار الفعلي
+          $linkPath = "$targetDir\Python312"
+          if (Test-Path $linkPath) {
+            Remove-Item $linkPath -Recurse -Force
+          }
+          
+          # إنشاء رابط رمزي (symbolic link)
+          cmd /c mklink /J "$linkPath" "$pythonDir"
+          
+          Write-Host "Created symlink from $linkPath to $pythonDir"
+          Write-Host "Python executable: $pythonPath"
+          
+          # التحقق
+          python --version
+
+      - name: Configure local.properties
+        shell: powershell
+        run: |
+          $sdkPath = $env:ANDROID_SDK_ROOT -replace '\\', '/'
+          "sdk.dir=$sdkPath" | Out-File -Encoding ascii local.properties
+
+      - name: Cache FFmpeg build
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: app/build/ffmpeg-android
+          key: ffmpeg-android-${{ hashFiles('.ci/build-windows-clang.sh') }}
+
+      - name: Cache native core build
+        uses: actions/cache@v4
+        with:
+          path: app/build/emucorec-core-build
+          key: core-build-${{ hashFiles('android/CMakeLists.txt', 'android/configure-core.cmd', 'rpcs3/**') }}
+          restore-keys: |
+            core-build-
+
+      # Ephemeral key, regenerated on every run — build verification only, not for distribution.
+      - name: Generate signing key
+        shell: powershell
+        run: |
+          $keytool = "$env:JAVA_HOME\bin\keytool.exe"
+          & $keytool -genkeypair -v `
             -keystore app/test-release.keystore `
-            -alias testkey `
-            -keyalg RSA `
-            -keysize 2048 `
-            -validity 10000 `
-            -storepass android `
-            -keypass android `
+            -alias testkey -keyalg RSA -keysize 2048 -validity 10000 `
+            -storepass android -keypass android `
             -dname "CN=Test, OU=Test, O=Test, L=Test, S=Test, C=US"
 
-      - name: Configure Signing
+      - name: Apply release signing config
         shell: powershell
         run: |
-          @"
+          $block = @"
+
           android {
               signingConfigs {
                   create("testRelease") {
@@ -129,28 +196,42 @@ jobs:
                   }
               }
           }
-          "@ | Out-File -FilePath "app/build.gradle.kts" -Append -Encoding ascii
+          "@
+          Add-Content -Path "app/build.gradle.kts" -Value $block
 
-      - name: Assemble Release
-        shell: cmd
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+
+      - name: Assemble release
+        shell: powershell
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_21_X64 }}
+          Python3_ROOT_DIR: ${{ env.Python3_ROOT_DIR }}
+          Python_ROOT_DIR: ${{ env.Python_ROOT_DIR }}
         run: |
-          gradlew.bat :app:assembleRelease --parallel --build-cache -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.caching=true
+          # تأكيد أن Python يعمل
+          python --version
+          .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache
 
-      - name: Upload APK
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: EmuCoreC-release-apk
           path: app/build/outputs/apk/release/*.apk
 
-      - name: Debug Build Logs
-        if: failure()
+      - name: Dump FFmpeg config.log (debug)
+        if: always()
         shell: powershell
         run: |
-          Get-ChildItem -Recurse -Filter "config.log" | Select-Object -First 1 | ForEach-Object {
-            Write-Host "Found: $($_.FullName)"
-            Get-Content $_.FullName -Tail 100
-          }
-          Get-ChildItem -Recurse -Filter "CMakeError.log" | Select-Object -First 1 | ForEach-Object {
-            Write-Host "Found: $($_.FullName)"
-            Get-Content $_.FullName -Tail 100
+          $log = Get-ChildItem -Path . -Recurse -Filter "config.log" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($log) {
+            Write-Host "Found: $($log.FullName)"
+            Get-Content $log.FullName -Tail 150
+          } else {
+            Write-Host "No config.log found anywhere in the workspace."
           }
