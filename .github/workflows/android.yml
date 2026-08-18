@@ -1,4 +1,4 @@
-name: Android Release Build
+name: Build APK
 
 on:
   workflow_dispatch:
@@ -32,32 +32,30 @@ jobs:
           path: .git/modules
           key: submodules-${{ hashFiles('.gitmodules') }}
 
-      - name: Set up JDK 17 and 21
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: |
-            17
-            21
+          java-version: '21'
 
-      - name: Set up MSVC environment
+      - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Cache Android SDK components
+      - name: Cache SDK build tools
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.ANDROID_SDK_ROOT }}\platforms
             ${{ env.ANDROID_SDK_ROOT }}\build-tools
             ${{ env.ANDROID_SDK_ROOT }}\platform-tools
-          key: android-sdk-components-${{ hashFiles('**/build.gradle*', '**/gradle.properties') }}
+          key: sdk-build-tools-${{ hashFiles('**/build.gradle*', '**/gradle.properties') }}
           restore-keys: |
-            android-sdk-components-
+            sdk-build-tools-
 
       - name: Cache NDK and CMake
         id: cache-ndk
@@ -81,14 +79,14 @@ jobs:
           $ndkPath = "$env:ANDROID_SDK_ROOT\ndk\$env:NDK_VERSION" -replace '\\', '/'
           "NDK_DIR=$ndkPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Cache MinGW-w64 toolchain
+      - name: Cache MinGW toolchain
         id: cache-mingw
         uses: actions/cache@v4
         with:
           path: ${{ env.LOCALAPPDATA }}\mingw
           key: mingw-${{ env.MINGW_TAG }}
 
-      - name: Install MinGW-w64 toolchain
+      - name: Install MinGW toolchain
         if: steps.cache-mingw.outputs.cache-hit != 'true'
         shell: powershell
         run: |
@@ -117,7 +115,7 @@ jobs:
           Add-MpPreference -ExclusionPath "$env:TEMP"
           Set-MpPreference -DisableRealtimeMonitoring $true
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -149,7 +147,6 @@ jobs:
           "sdk.dir=$sdkPath" | Out-File -Encoding ascii local.properties
 
       - name: Cache FFmpeg build
-        id: cache-ffmpeg
         uses: actions/cache@v4
         with:
           path: app/build/ffmpeg-android
@@ -157,7 +154,7 @@ jobs:
           restore-keys: |
             ffmpeg-android-
 
-      - name: Cache native core build
+      - name: Cache native build tree
         uses: actions/cache@v4
         with:
           path: app/build/emucorec-core-build
@@ -199,7 +196,7 @@ jobs:
           "@
           Add-Content -Path "app/build.gradle.kts" -Value $block
 
-      - name: Cache Gradle dependencies
+      - name: Setup Gradle cache
         uses: actions/cache@v4
         with:
           path: |
@@ -209,10 +206,9 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: Assemble release
+      - name: Build APK
         shell: powershell
         env:
-          JAVA_HOME: ${{ env.JAVA_HOME_21_X64 }}
           Python3_ROOT_DIR: ${{ env.Python3_ROOT_DIR }}
           Python_ROOT_DIR: ${{ env.Python_ROOT_DIR }}
         run: |
