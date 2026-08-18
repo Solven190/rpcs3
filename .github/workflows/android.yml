@@ -113,6 +113,9 @@ jobs:
           }
           EOF
 
+      - name: Make Gradlew Executable
+        run: chmod +x gradlew
+
       - name: Assemble Release
         run: |
           ./gradlew :app:assembleRelease \
