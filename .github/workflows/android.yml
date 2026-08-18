@@ -113,8 +113,12 @@ jobs:
           }
           EOF
 
-      - name: Make Gradlew Executable
-        run: chmod +x gradlew
+      - name: Fix Gradle for Linux
+        run: |
+          chmod +x gradlew
+          mkdir -p /c/Program\ Files/Git/bin/
+          ln -sf /usr/bin/bash /c/Program\ Files/Git/bin/bash.exe
+          echo "systemProp.bash.path=/usr/bin/bash" >> gradle.properties
 
       - name: Assemble Release
         run: |
