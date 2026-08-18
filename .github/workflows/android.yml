@@ -5,8 +5,17 @@ on:
   push:
     branches: [ main, master ]
 
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 29.0.14206865
+  CMAKE_VERSION: 3.30.5
+  MINGW_TAG: 13.2.0-rt_v11-rev1
+
 jobs:
-  release:
+  build:
     runs-on: windows-latest
     timeout-minutes: 180
 
@@ -23,17 +32,13 @@ jobs:
           path: .git/modules
           key: submodules-${{ hashFiles('.gitmodules') }}
 
-      - name: Set up JDK 17
+      - name: Set up JDK 17 and 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
+          distribution: temurin
+          java-version: |
+            17
+            21
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -43,26 +48,37 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Cache NDK & CMake
+      - name: Cache Android SDK components
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_ROOT }}\platforms
+            ${{ env.ANDROID_SDK_ROOT }}\build-tools
+            ${{ env.ANDROID_SDK_ROOT }}\platform-tools
+          key: android-sdk-components-${{ hashFiles('**/build.gradle*', '**/gradle.properties') }}
+          restore-keys: |
+            android-sdk-components-
+
+      - name: Cache NDK and CMake
         id: cache-ndk
         uses: actions/cache@v4
         with:
           path: |
-            ${{ env.ANDROID_SDK_ROOT }}\ndk\29.0.14206865
-            ${{ env.ANDROID_SDK_ROOT }}\cmake\3.30.5
-          key: ndk-cmake-29.0.14206865-3.30.5
+            ${{ env.ANDROID_SDK_ROOT }}\ndk\${{ env.NDK_VERSION }}
+            ${{ env.ANDROID_SDK_ROOT }}\cmake\${{ env.CMAKE_VERSION }}
+          key: ndk-cmake-${{ env.NDK_VERSION }}-${{ env.CMAKE_VERSION }}
 
-      - name: Install NDK & CMake
+      - name: Install NDK and CMake
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         shell: cmd
         run: |
-          sdkmanager --install "ndk;29.0.14206865"
-          sdkmanager --install "cmake;3.30.5"
+          sdkmanager --install "ndk;%NDK_VERSION%"
+          sdkmanager --install "cmake;%CMAKE_VERSION%"
 
-      - name: Export NDK_DIR for FFmpeg build script
+      - name: Export NDK_DIR
         shell: powershell
         run: |
-          $ndkPath = "$env:ANDROID_SDK_ROOT\ndk\29.0.14206865" -replace '\\', '/'
+          $ndkPath = "$env:ANDROID_SDK_ROOT\ndk\$env:NDK_VERSION" -replace '\\', '/'
           "NDK_DIR=$ndkPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache MinGW-w64 toolchain
@@ -70,17 +86,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.LOCALAPPDATA }}\mingw
-          key: mingw-nixman-13.2.0-rt_v11-rev1
+          key: mingw-${{ env.MINGW_TAG }}
 
-      - name: Install MinGW-w64 toolchain (GCC 13.2.0)
+      - name: Install MinGW-w64 toolchain
         if: steps.cache-mingw.outputs.cache-hit != 'true'
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://github.com/niXman/mingw-builds-binaries/releases/download/13.2.0-rt_v11-rev1/x86_64-13.2.0-release-posix-seh-ucrt-rt_v11-rev1.7z"
+          $url = "https://github.com/niXman/mingw-builds-binaries/releases/download/$env:MINGW_TAG/x86_64-13.2.0-release-posix-seh-ucrt-rt_v11-rev1.7z"
           $archive = "$env:RUNNER_TEMP\mingw.7z"
           curl.exe -L --fail --retry 3 -o $archive $url
-          if ($LASTEXITCODE -ne 0) { throw "curl download failed with exit code $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "MinGW download failed (exit code $LASTEXITCODE)" }
+
           $target = "$env:LOCALAPPDATA\mingw"
           New-Item -ItemType Directory -Force -Path $target | Out-Null
           & "C:\Program Files\7-Zip\7z.exe" x $archive -o"$target" -y
@@ -93,11 +110,6 @@ jobs:
         run: |
           "$env:LOCALAPPDATA\mingw\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Verify MinGW GCC version
-        shell: powershell
-        run: |
-          & "$env:LOCALAPPDATA\mingw\mingw64\bin\gcc.exe" --version
-
       - name: Disable Windows Defender scanning
         shell: powershell
         run: |
@@ -105,44 +117,30 @@ jobs:
           Add-MpPreference -ExclusionPath "$env:TEMP"
           Set-MpPreference -DisableRealtimeMonitoring $true
 
-      # ====== الحل الأساسي لمشكلة Python ======
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # الحل السحري: استخدام Python من المسار الصحيح
-      - name: Fix Python path for CMake
+      # CMake's FindPython expects a versioned Programs\Python\PythonXXX folder;
+      # setup-python installs elsewhere, so point CMake at the real interpreter.
+      - name: Point CMake to the Python interpreter
         shell: powershell
         run: |
-          # الحصول على المسار الفعلي لـ Python
           $pythonPath = (Get-Command python).Source
           $pythonDir = Split-Path $pythonPath -Parent
-          
-          # تعيين متغيرات البيئة
+
           "Python3_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "Python_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          
-          # إنشاء رابط رمزي للمسار الذي يبحث عنه CMake
+
           $targetDir = "C:\Users\runneradmin\AppData\Local\Programs\Python"
-          if (-not (Test-Path $targetDir)) {
-            New-Item -ItemType Directory -Path $targetDir -Force
-          }
-          
-          # إنشاء مجلد Python312 كرابط للمسار الفعلي
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+
           $linkPath = "$targetDir\Python312"
           if (Test-Path $linkPath) {
             Remove-Item $linkPath -Recurse -Force
           }
-          
-          # إنشاء رابط رمزي (symbolic link)
           cmd /c mklink /J "$linkPath" "$pythonDir"
-          
-          Write-Host "Created symlink from $linkPath to $pythonDir"
-          Write-Host "Python executable: $pythonPath"
-          
-          # التحقق
-          python --version
 
       - name: Configure local.properties
         shell: powershell
@@ -156,6 +154,8 @@ jobs:
         with:
           path: app/build/ffmpeg-android
           key: ffmpeg-android-${{ hashFiles('.ci/build-windows-clang.sh') }}
+          restore-keys: |
+            ffmpeg-android-
 
       - name: Cache native core build
         uses: actions/cache@v4
@@ -165,7 +165,7 @@ jobs:
           restore-keys: |
             core-build-
 
-      # Ephemeral key, regenerated on every run — build verification only, not for distribution.
+      # Regenerated every run for build verification only - never used for real signing.
       - name: Generate signing key
         shell: powershell
         run: |
@@ -206,6 +206,8 @@ jobs:
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Assemble release
         shell: powershell
@@ -214,8 +216,6 @@ jobs:
           Python3_ROOT_DIR: ${{ env.Python3_ROOT_DIR }}
           Python_ROOT_DIR: ${{ env.Python_ROOT_DIR }}
         run: |
-          # تأكيد أن Python يعمل
-          python --version
           .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache
 
       - name: Upload artifact
@@ -224,14 +224,13 @@ jobs:
           name: EmuCoreC-release-apk
           path: app/build/outputs/apk/release/*.apk
 
-      - name: Dump FFmpeg config.log (debug)
+      - name: Dump FFmpeg config.log
         if: always()
         shell: powershell
         run: |
           $log = Get-ChildItem -Path . -Recurse -Filter "config.log" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($log) {
-            Write-Host "Found: $($log.FullName)"
             Get-Content $log.FullName -Tail 150
           } else {
-            Write-Host "No config.log found anywhere in the workspace."
+            Write-Host "No config.log found in workspace."
           }
