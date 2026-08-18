@@ -132,14 +132,9 @@ jobs:
           "@ | Out-File -FilePath "app/build.gradle.kts" -Append -Encoding ascii
 
       - name: Assemble Release
-        shell: powershell
+        shell: cmd
         run: |
-          .\gradlew.bat :app:assembleRelease `
-            --parallel `
-            --build-cache `
-            -Dorg.gradle.jvmargs=-Xmx4g `
-            -Dorg.gradle.parallel=true `
-            -Dorg.gradle.caching=true
+          gradlew.bat :app:assembleRelease --parallel --build-cache -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.caching=true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
