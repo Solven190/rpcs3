@@ -141,6 +141,22 @@ jobs:
           $sdkPath = $env:ANDROID_SDK_ROOT -replace '\\', '/'
           "sdk.dir=$sdkPath" | Out-File -Encoding ascii local.properties
 
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('android/CMakeLists.txt', 'android/configure-core.cmd') }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Setup ccache
+        shell: powershell
+        run: |
+          choco install ccache -y
+          echo "CCACHE_DIR=~/.ccache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CCACHE_MAXSIZE=2G" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PATH=C:\ProgramData\chocolatey\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Cache FFmpeg build
         uses: actions/cache@v4
         with:
