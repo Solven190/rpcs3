@@ -13,6 +13,7 @@ env:
   NDK_VERSION: 29.0.14206865
   CMAKE_VERSION: 3.30.5
   MINGW_TAG: 13.2.0-rt_v11-rev1
+  LLVM_VERSION: 16.0.0
 
 jobs:
   build:
@@ -144,7 +145,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/build/ffmpeg-android
-          key: ffmpeg-android-${{ hashFiles('android/build-ffmpeg.sh') }}
+          key: ffmpeg-android-${{ env.NDK_VERSION }}-v8.1.1
           restore-keys: |
             ffmpeg-android-
 
@@ -152,7 +153,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/build/emucorec-core-build
-          key: core-build-${{ hashFiles('android/CMakeLists.txt', 'android/configure-core.cmd') }}
+          key: core-build-${{ env.NDK_VERSION }}-llvm${{ env.LLVM_VERSION }}
           restore-keys: |
             core-build-
 
