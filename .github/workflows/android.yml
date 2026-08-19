@@ -30,9 +30,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .git/modules
-          key: submodules-${{ hashFiles('.gitmodules') }}-${{ runner.os }}
-          restore-keys: |
-            submodules-${{ runner.os }}-
+          key: submodules-${{ hashFiles('.gitmodules') }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -55,9 +53,9 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}\platforms
             ${{ env.ANDROID_SDK_ROOT }}\build-tools
             ${{ env.ANDROID_SDK_ROOT }}\platform-tools
-          key: sdk-tools-${{ runner.os }}-${{ hashFiles('**/build.gradle*', '**/gradle.properties') }}
+          key: sdk-build-tools-${{ hashFiles('**/build.gradle*', '**/gradle.properties') }}
           restore-keys: |
-            sdk-tools-${{ runner.os }}-
+            sdk-build-tools-
 
       - name: Cache NDK and CMake
         id: cache-ndk
@@ -66,10 +64,7 @@ jobs:
           path: |
             ${{ env.ANDROID_SDK_ROOT }}\ndk\${{ env.NDK_VERSION }}
             ${{ env.ANDROID_SDK_ROOT }}\cmake\${{ env.CMAKE_VERSION }}
-          key: ndk-cmake-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.CMAKE_VERSION }}
-          restore-keys: |
-            ndk-cmake-${{ runner.os }}-${{ env.NDK_VERSION }}-
-            ndk-cmake-${{ runner.os }}-
+          key: ndk-cmake-${{ env.NDK_VERSION }}-${{ env.CMAKE_VERSION }}
 
       - name: Install NDK and CMake
         if: steps.cache-ndk.outputs.cache-hit != 'true'
@@ -89,9 +84,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.LOCALAPPDATA }}\mingw
-          key: mingw-${{ runner.os }}-${{ env.MINGW_TAG }}
-          restore-keys: |
-            mingw-${{ runner.os }}-
+          key: mingw-${{ env.MINGW_TAG }}
 
       - name: Install MinGW toolchain
         if: steps.cache-mingw.outputs.cache-hit != 'true'
@@ -102,7 +95,6 @@ jobs:
           $archive = "$env:RUNNER_TEMP\mingw.7z"
           curl.exe -L --fail --retry 3 -o $archive $url
           if ($LASTEXITCODE -ne 0) { throw "MinGW download failed (exit code $LASTEXITCODE)" }
-
           $target = "$env:LOCALAPPDATA\mingw"
           New-Item -ItemType Directory -Force -Path $target | Out-Null
           & "C:\Program Files\7-Zip\7z.exe" x $archive -o"$target" -y
@@ -132,13 +124,10 @@ jobs:
         run: |
           $pythonPath = (Get-Command python).Source
           $pythonDir = Split-Path $pythonPath -Parent
-
           "Python3_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "Python_ROOT_DIR=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
           $targetDir = "C:\Users\runneradmin\AppData\Local\Programs\Python"
           New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-
           $linkPath = "$targetDir\Python312"
           if (Test-Path $linkPath) {
             Remove-Item $linkPath -Recurse -Force
@@ -152,48 +141,21 @@ jobs:
           "sdk.dir=$sdkPath" | Out-File -Encoding ascii local.properties
 
       - name: Cache FFmpeg build
-        id: cache-ffmpeg
         uses: actions/cache@v4
         with:
           path: app/build/ffmpeg-android
-          key: ffmpeg-android-${{ runner.os }}-${{ hashFiles('.ci/build-windows-clang.sh') }}-${{ hashFiles('app/src/main/cpp/ffmpeg/**') }}
+          key: ffmpeg-android-${{ hashFiles('android/build-ffmpeg.sh') }}
           restore-keys: |
-            ffmpeg-android-${{ runner.os }}-
             ffmpeg-android-
 
       - name: Cache native build tree
-        id: cache-native
         uses: actions/cache@v4
         with:
           path: app/build/emucorec-core-build
-          key: core-build-${{ runner.os }}-${{ github.sha }}
+          key: core-build-${{ hashFiles('android/CMakeLists.txt', 'android/configure-core.cmd') }}
           restore-keys: |
-            core-build-${{ runner.os }}-
             core-build-
 
-      - name: Cache Gradle wrapper
-        id: cache-gradle-wrapper
-        uses: actions/cache@v4
-        with:
-          path: ~/.gradle/wrapper
-          key: gradle-wrapper-${{ runner.os }}-${{ hashFiles('**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-wrapper-${{ runner.os }}-
-
-      - name: Cache Gradle dependencies
-        id: cache-gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches/modules-2
-            ~/.gradle/caches/jars-9
-            ~/.gradle/caches/build-cache-1
-          key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-deps-${{ runner.os }}-
-            gradle-deps-
-
-      # Regenerated every run for build verification only - never used for real signing.
       - name: Generate signing key
         shell: powershell
         run: |
@@ -227,18 +189,15 @@ jobs:
           "@
           Add-Content -Path "app/build.gradle.kts" -Value $block
 
-      - name: Setup Gradle properties for caching
-        shell: powershell
-        run: |
-          $props = @"
-          org.gradle.caching=true
-          org.gradle.parallel=true
-          org.gradle.daemon=true
-          org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=512m
-          android.useAndroidX=true
-          android.enableJetifier=true
-          "@
-          $props | Out-File -FilePath "gradle.properties" -Encoding utf8 -Append
+      - name: Setup Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Build APK
         shell: powershell
@@ -246,7 +205,7 @@ jobs:
           Python3_ROOT_DIR: ${{ env.Python3_ROOT_DIR }}
           Python_ROOT_DIR: ${{ env.Python_ROOT_DIR }}
         run: |
-          .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache --no-daemon
+          .\gradlew.bat :app:assembleRelease --stacktrace --parallel --build-cache
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
