@@ -1,12 +1,4 @@
 @echo off
-rem EmuCoreC: configure the RPCS3 Android core build on Windows.
-rem
-rem Gradle's Exec environment does not survive into the nested cmake
-rem FetchContent processes (absl via protobuf runs `git submodule update`,
-rem whose bash script needs the Git for Windows bin dirs and exec path), so
-rem the environment is fixed here in a cmd wrapper instead.
-rem
-rem Usage: configure-core.cmd <cmake.exe> <ninja.exe> <ndk-dir> <build-dir> [extra -D args...]
 setlocal
 set "MINGW=%LOCALAPPDATA%\mingw\mingw64\bin"
 set "GITBINS=C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\mingw64\bin"
@@ -19,8 +11,6 @@ set "NDK_DIR=%~3"
 set "BUILD_DIR=%~4"
 shift /4
 
-rem %~dp0.. is the repository root; the android/ subdirectory is added to the
-rem root CMake project behind if(ANDROID).
 "%CMAKE_EXE%" -S "%~dp0.." -B "%BUILD_DIR%" -G Ninja ^
   -DCMAKE_TOOLCHAIN_FILE="%NDK_DIR%\build\cmake\android.toolchain.cmake" ^
   -DANDROID_ABI=arm64-v8a ^
@@ -39,10 +29,10 @@ rem root CMake project behind if(ANDROID).
   -DUSE_DISCORD_RPC=OFF ^
   -DUSE_FAUDIO=OFF ^
   -DUSE_LIBEVDEV=OFF ^
-  -DWITH_LLVM=ON ^
-  -DBUILD_LLVM=ON ^
-  -DSTATIC_LINK_LLVM=ON ^
-  -DLLVM_ENABLE_LIBCXX=ON ^
+  -DWITH_LLVM=OFF ^
+  -DBUILD_LLVM=OFF ^
+  -DSTATIC_LINK_LLVM=OFF ^
+  -DLLVM_DIR="%NDK_DIR%\toolchains\llvm\prebuilt\windows-x86_64\lib\cmake\llvm" ^
   -DUSE_LTO=OFF ^
   -DASMJIT_NO_SHM_OPEN=ON ^
   -DPython3_EXECUTABLE="%LOCALAPPDATA%\Programs\Python\Python312\python.exe" ^
