@@ -149,12 +149,24 @@ jobs:
             ffmpeg-android-
 
       - name: Cache native build tree
+        id: cache-core
         uses: actions/cache@v4
         with:
           path: app/build/emucorec-core-build
-          key: core-build-${{ env.NDK_VERSION }}
+          key: core-build-${{ env.NDK_VERSION }}-${{ env.CMAKE_VERSION }}-${{ hashFiles('android/CMakeLists.txt', 'android/configure-core.cmd') }}
           restore-keys: |
+            core-build-${{ env.NDK_VERSION }}-${{ env.CMAKE_VERSION }}-
+            core-build-${{ env.NDK_VERSION }}-
             core-build-
+
+      - name: Build native code with ninja (if cache miss)
+        if: steps.cache-core.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          set PATH=%PATH%;C:\Program Files\Git\cmd
+          call android\configure-core.cmd cmake.exe ninja.exe %NDK_DIR% app\build\emucorec-core-build
+          cd app\build\emucorec-core-build
+          ninja
 
       - name: Generate signing key
         shell: powershell
