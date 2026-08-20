@@ -13,7 +13,6 @@ env:
   NDK_VERSION: 29.0.14206865
   CMAKE_VERSION: 3.30.5
   MINGW_TAG: 13.2.0-rt_v11-rev1
-  LLVM_VERSION: 16.0.0
 
 jobs:
   build:
@@ -141,21 +140,17 @@ jobs:
           $sdkPath = $env:ANDROID_SDK_ROOT -replace '\\', '/'
           "sdk.dir=$sdkPath" | Out-File -Encoding ascii local.properties
 
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ runner.os }}-${{ hashFiles('android/CMakeLists.txt', 'android/configure-core.cmd') }}
-          restore-keys: |
-            ccache-${{ runner.os }}-
-
-      - name: Setup ccache
+      - name: Disable LLVM build in configure-core.cmd
         shell: powershell
         run: |
-          choco install ccache -y
-          echo "CCACHE_DIR=~/.ccache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "CCACHE_MAXSIZE=2G" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "PATH=C:\ProgramData\chocolatey\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $file = "android/configure-core.cmd"
+          $content = Get-Content $file -Raw
+          $content = $content -replace '-DBUILD_LLVM=ON', '-DBUILD_LLVM=OFF'
+          $content = $content -replace '-DSTATIC_LINK_LLVM=ON', '-DSTATIC_LINK_LLVM=OFF'
+          $content = $content -replace '-DWITH_LLVM=ON', '-DWITH_LLVM=OFF'
+          $llvmDir = "$env:NDK_DIR/toolchains/llvm/prebuilt/windows-x86_64"
+          $content = $content -replace '(?<=-DCMAKE_MAKE_PROGRAM="[^"]*" )', "-DLLVM_DIR=`"$llvmDir/lib/cmake/llvm`" "
+          Set-Content -Path $file -Value $content -NoNewline
 
       - name: Cache FFmpeg build
         uses: actions/cache@v4
@@ -169,7 +164,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: app/build/emucorec-core-build
-          key: core-build-${{ env.NDK_VERSION }}-llvm${{ env.LLVM_VERSION }}
+          key: core-build-${{ env.NDK_VERSION }}-llvm-ndk
           restore-keys: |
             core-build-
 
